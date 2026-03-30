@@ -1,9 +1,10 @@
 ﻿from flask import Flask, request, jsonify, render_template
-from enovation_recommender import build_flexible_ui_payload, build_ui_payload, run_sparql
 import json
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
+
+from enovation_recommender import build_flexible_ui_payload, build_ui_payload, run_sparql
 
 # Flask app + feedback log location.
 app = Flask(__name__)
@@ -43,17 +44,11 @@ CORE_TARGET_TYPE_ORDER = [
     "TrainingCentre",
     "TrainingCourse",
     "Technology",
-    "Service",
     "SOP",
-    "Standard",
     "Facility",
     "Scenario",
     "Incident",
-    "ThreatAgent",
     "Exercise",
-    "ResponseAction",
-    "CBRNNetwork",
-    "Resource",
 ]
 
 CORE_SEED_TYPE_KEYS = set(CORE_SEED_TYPE_ORDER)
@@ -499,7 +494,7 @@ def api_recommend():
             return jsonify({"error": f"Unknown target type: {target_type}"}), 400
 
         prepared_seeds = []
-        for seed in seeds[:3]:
+        for seed in seeds[:5]:
             seed_type = _resolve_catalog_key(seed.get("type"))
             seed_mode = seed.get("mode")
             seed_type_uri = catalog["key_to_uri"].get(seed_type)

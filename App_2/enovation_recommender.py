@@ -15,8 +15,15 @@ logger = logging.getLogger(__name__)
 EN_NS = "http://www.semanticweb.org/eNOVATION-ontology#"
 EN = Namespace(EN_NS)
 FUSEKI_ENDPOINT = os.getenv("FUSEKI_ENDPOINT", "http://147.102.6.178:3030/enovation/sparql")
-MAX_PATH_LENGTH = 3
+MAX_PATH_LENGTH = 4
 LENGTH_DECAY_ALPHA = 0.4
+INCLUDE_GLOBALLY_MISSING_IN_SCORE = False
+SHOW_GLOBALLY_MISSING_IN_ANALYSIS = False
+ALLOW_SAME_CLASS_REENTRY = False
+ALLOW_SIBLING_CLASS_REENTRY = False
+CLASS_URI_ALIASES = {
+    f"{EN_NS}ResponceAction": f"{EN_NS}ResponseAction",
+}
 SEMANTIC_FAMILY_ORDER = [
     f"{EN_NS}TrainingCentre",
     f"{EN_NS}TrainingCourse",
@@ -46,6 +53,7 @@ _GRAPH_CACHE: Optional[Dict[str, Any]] = None
 _TBOX_CACHE: Optional[Dict[str, Any]] = None
 _CRITERION_CACHE: Dict[Tuple[str, str, int], List[Dict[str, Any]]] = {}
 _CRITERION_MATCH_CACHE: Dict[Tuple[str, Tuple[Any, ...]], Dict[str, List[Dict[str, Any]]]] = {}
+_CRITERION_GLOBAL_SUPPORT_CACHE: Dict[Tuple[Tuple[Any, ...], str], bool] = {}
 _PATH_DISCOVERY_CACHE: Dict[Tuple[str, str, int], Dict[str, List[Dict[str, Any]]]] = {}
 _PCRW_CACHE: Dict[Tuple[str, Tuple[Any, ...]], Dict[str, float]] = {}
 _URI_CACHE: Dict[str, Optional[str]] = {}
@@ -76,6 +84,10 @@ def _local_name(uri: str) -> str:
     if "#" in uri:
         return uri.rsplit("#", 1)[-1]
     return uri.rsplit("/", 1)[-1]
+
+
+def _canonical_class_uri(uri: str) -> str:
+    return CLASS_URI_ALIASES.get(uri, uri)
 
 
 def _humanize_local_name(name: str) -> str:
@@ -204,11 +216,11 @@ def _fetch_graph_cache() -> Dict[str, Any]:
     class_labels: Dict[str, str] = {}
     direct_parents: Dict[str, Set[str]] = defaultdict(set)
     for binding in class_data.get("results", {}).get("bindings", []):
-        class_uri = binding["class"]["value"]
+        class_uri = _canonical_class_uri(binding["class"]["value"])
         class_labels.setdefault(class_uri, _label_or_name(class_uri, _get_val(binding, "label")))
         parent_uri = _get_val(binding, "parent")
         if parent_uri:
-            direct_parents[class_uri].add(parent_uri)
+            direct_parents[class_uri].add(_canonical_class_uri(parent_uri))
     for class_uri in list(class_labels):
         direct_parents.setdefault(class_uri, set())
 
@@ -263,7 +275,7 @@ def _fetch_graph_cache() -> Dict[str, Any]:
                 "all_types": set(),
             },
         )
-        type_uri = binding["type"]["value"]
+        type_uri = _canonical_class_uri(binding["type"]["value"])
         if type_uri in class_labels:
             ind["direct_types"].add(type_uri)
 
@@ -272,6 +284,16 @@ def _fetch_graph_cache() -> Dict[str, Any]:
         for direct_type in ind["direct_types"]:
             all_types.update(ancestors_map.get(direct_type, {direct_type}))
         ind["all_types"] = all_types
+
+    observed_direct_types_by_type: Dict[str, Set[str]] = defaultdict(set)
+    for class_uri in class_labels:
+        observed_direct_types_by_type[class_uri].add(class_uri)
+    for ind in individuals.values():
+        direct_types = set(ind["direct_types"])
+        if not direct_types:
+            continue
+        for class_uri in ind["all_types"]:
+            observed_direct_types_by_type[class_uri].update(direct_types)
 
     individual_uris = set(individuals)
     forward_adj: Dict[str, Dict[str, Set[str]]] = defaultdict(lambda: defaultdict(set))
@@ -336,6 +358,9 @@ def _fetch_graph_cache() -> Dict[str, Any]:
         "reverse_adj": {node: {prop: sorted(sources) for prop, sources in props.items()} for node, props in reverse_adj.items()},
         "adjacency": {node: edges for node, edges in adjacency.items()},
         "connected_individuals": connected_individuals,
+        "observed_direct_types_by_type": {
+            class_uri: set(class_set) for class_uri, class_set in observed_direct_types_by_type.items()
+        },
     }
     return _GRAPH_CACHE
 
@@ -399,6 +424,47 @@ def _would_reenter_semantic_family(family_history: Tuple[str, ...], next_family:
     if next_family == family_history[-1]:
         return False
     return next_family in family_history
+
+
+def _classes_conflict_in_path(
+    left_class: str,
+    right_class: str,
+    ancestors_map: Dict[str, Set[str]],
+    direct_parents_map: Dict[str, Set[str]],
+) -> bool:
+    if not left_class or not right_class:
+        return False
+    if left_class == right_class:
+        return not ALLOW_SAME_CLASS_REENTRY
+
+    left_ancestors = ancestors_map.get(left_class, {left_class})
+    right_ancestors = ancestors_map.get(right_class, {right_class})
+
+    # Never allow re-entering the same ancestor/descendant branch.
+    if left_class in right_ancestors or right_class in left_ancestors:
+        return True
+
+    left_parents = direct_parents_map.get(left_class, set())
+    right_parents = direct_parents_map.get(right_class, set())
+    if left_parents and right_parents and left_parents.intersection(right_parents):
+        return not ALLOW_SIBLING_CLASS_REENTRY
+
+    return False
+
+
+def _would_reenter_class_branch(
+    class_history: Tuple[str, ...],
+    next_class: str,
+    ancestors_map: Dict[str, Set[str]],
+    direct_parents_map: Dict[str, Set[str]],
+) -> bool:
+    if not next_class or not class_history:
+        return False
+    return any(
+        _classes_conflict_in_path(previous_class, next_class, ancestors_map, direct_parents_map)
+        for previous_class in class_history
+        if previous_class
+    )
 
 
 def _step_token(step: Dict[str, Any]) -> str:
@@ -533,26 +599,27 @@ def _fetch_tbox_cache() -> Dict[str, Any]:
 
     for cls in rdf_graph.subjects(RDF.type, OWL.Class):
         if isinstance(cls, URIRef) and str(cls).startswith(EN_NS):
-            classes.add(str(cls))
+            class_uri = _canonical_class_uri(str(cls))
+            classes.add(class_uri)
+            class_labels.setdefault(class_uri, _first_graph_label(rdf_graph, cls))
     for cls in rdf_graph.subjects(RDF.type, RDFS.Class):
         if isinstance(cls, URIRef) and str(cls).startswith(EN_NS):
-            classes.add(str(cls))
-
-    for class_uri in classes:
-        class_labels[class_uri] = _humanize_local_name(_local_name(class_uri))
+            class_uri = _canonical_class_uri(str(cls))
+            classes.add(class_uri)
+            class_labels.setdefault(class_uri, _first_graph_label(rdf_graph, cls))
 
     for cls, parent in rdf_graph.subject_objects(RDFS.subClassOf):
         if not (isinstance(cls, URIRef) and isinstance(parent, URIRef)):
             continue
-        cls_uri = str(cls)
-        parent_uri = str(parent)
+        cls_uri = _canonical_class_uri(str(cls))
+        parent_uri = _canonical_class_uri(str(parent))
         if cls_uri not in classes or parent_uri not in classes:
             continue
         direct_parents[cls_uri].add(parent_uri)
 
     for class_uri in classes:
         direct_parents.setdefault(class_uri, set())
-        class_labels[class_uri] = _first_graph_label(rdf_graph, URIRef(class_uri))
+        class_labels.setdefault(class_uri, _humanize_local_name(_local_name(class_uri)))
 
     ancestors_map: Dict[str, Set[str]] = {}
     for class_uri in classes:
@@ -582,6 +649,8 @@ def _fetch_tbox_cache() -> Dict[str, Any]:
         right_uri = str(right)
         if not (left_uri.startswith(EN_NS) and right_uri.startswith(EN_NS)):
             continue
+        left_uri = _canonical_class_uri(left_uri)
+        right_uri = _canonical_class_uri(right_uri)
         inverse_map[left_uri] = right_uri
         inverse_map[right_uri] = left_uri
 
@@ -598,12 +667,12 @@ def _fetch_tbox_cache() -> Dict[str, Any]:
         range_classes: Set[str] = set()
         for domain_expr in rdf_graph.objects(prop, RDFS.domain):
             for domain_uri in _expand_class_expr(rdf_graph, domain_expr):
-                domain_str = str(domain_uri)
+                domain_str = _canonical_class_uri(str(domain_uri))
                 if domain_str in classes:
                     domain_classes.add(domain_str)
         for range_expr in rdf_graph.objects(prop, RDFS.range):
             for range_uri in _expand_class_expr(rdf_graph, range_expr):
-                range_str = str(range_uri)
+                range_str = _canonical_class_uri(str(range_uri))
                 if range_str in classes:
                     range_classes.add(range_str)
 
@@ -681,12 +750,20 @@ def _criterion_key(start_class: str, steps: List[Dict[str, Any]]) -> Tuple[Any, 
     return tuple(key)
 
 
-def _schema_steps_for_class(current_class: str, tbox: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _schema_steps_for_class(current_class: str, tbox: Dict[str, Any], graph: Dict[str, Any]) -> List[Dict[str, Any]]:
     applicable_steps: List[Dict[str, Any]] = []
     seen: Set[Tuple[str, str]] = set()
-    ancestors = tbox["ancestors"].get(current_class, {current_class})
+    effective_classes = set(graph.get("observed_direct_types_by_type", {}).get(current_class, {current_class}))
+    effective_classes.add(current_class)
 
-    for ancestor_uri in sorted(ancestors, key=lambda uri: tbox["class_depth"].get(uri, 0), reverse=True):
+    schema_source_classes: Set[str] = set()
+    for effective_class in effective_classes:
+        if effective_class not in tbox["class_labels"]:
+            continue
+        schema_source_classes.add(effective_class)
+        schema_source_classes.update(tbox["ancestors"].get(effective_class, {effective_class}))
+
+    for ancestor_uri in sorted(schema_source_classes, key=lambda uri: tbox["class_depth"].get(uri, 0), reverse=True):
         for property_uri in tbox["properties_by_domain"].get(ancestor_uri, []):
             prop_meta = tbox["properties"].get(property_uri, {})
             for range_class in prop_meta.get("ranges", ()):
@@ -713,19 +790,24 @@ def _schema_steps_for_class(current_class: str, tbox: Dict[str, Any]) -> List[Di
     return applicable_steps
 
 
-def _extract_seed_criteria(start_class: str, target_root: str, tbox: Dict[str, Any], max_length: int = MAX_PATH_LENGTH) -> List[Dict[str, Any]]:
+def _extract_seed_criteria(
+    start_class: str,
+    target_root: str,
+    tbox: Dict[str, Any],
+    graph: Dict[str, Any],
+    max_length: int = MAX_PATH_LENGTH,
+) -> List[Dict[str, Any]]:
     cache_key = (start_class, target_root, max_length)
     if cache_key in _CRITERION_CACHE:
         return _CRITERION_CACHE[cache_key]
 
     criteria_by_key: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
-    start_family = _schema_family_class(start_class, tbox)
-    initial_family_history = (start_family,) if start_family else tuple()
+    initial_class_history = (start_class,) if start_class else tuple()
     queue: deque[Tuple[str, List[Dict[str, Any]], Tuple[str, ...]]] = deque()
-    queue.append((start_class, [], initial_family_history))
+    queue.append((start_class, [], initial_class_history))
 
     while queue:
-        current_class, steps, family_history = queue.popleft()
+        current_class, steps, class_history = queue.popleft()
         depth = len(steps)
 
         if depth > 0 and _tbox_is_subclass_of(current_class, target_root, tbox):
@@ -746,14 +828,21 @@ def _extract_seed_criteria(start_class: str, target_root: str, tbox: Dict[str, A
         if depth >= max_length:
             continue
 
-        for schema_step in _schema_steps_for_class(current_class, tbox):
+        for schema_step in _schema_steps_for_class(current_class, tbox, graph):
             next_class = schema_step["target_class"]
             next_is_target = _tbox_is_subclass_of(next_class, target_root, tbox)
             next_can_specialize_to_target = (not next_is_target) and _tbox_is_subclass_of(target_root, next_class, tbox)
-            next_family = _schema_family_class(next_class, tbox)
+            terminal_class = target_root if next_can_specialize_to_target else next_class
+
+            if _would_reenter_class_branch(
+                class_history,
+                terminal_class,
+                tbox["ancestors"],
+                tbox["direct_parents"],
+            ):
+                continue
 
             if next_is_target or next_can_specialize_to_target:
-                terminal_class = target_root if next_can_specialize_to_target else next_class
                 terminal_steps = steps + [
                     {
                         "property_uri": schema_step["property_uri"],
@@ -774,8 +863,6 @@ def _extract_seed_criteria(start_class: str, target_root: str, tbox: Dict[str, A
                         "steps": terminal_steps,
                         "signature": _criterion_signature(start_class, terminal_steps, tbox),
                     }
-
-            if not next_is_target and _would_reenter_semantic_family(family_history, next_family):
                 continue
 
             next_steps = steps + [
@@ -787,10 +874,8 @@ def _extract_seed_criteria(start_class: str, target_root: str, tbox: Dict[str, A
                 }
             ]
 
-            next_family_history = family_history
-            if next_family and (not family_history or next_family != family_history[-1]):
-                next_family_history = family_history + (next_family,)
-            queue.append((next_class, next_steps, next_family_history))
+            next_class_history = class_history + ((next_class,) if next_class else tuple())
+            queue.append((next_class, next_steps, next_class_history))
 
     criteria = list(criteria_by_key.values())
     criteria.sort(
@@ -861,6 +946,21 @@ def _discover_criterion_matches_for_seed_node(seed_node: str, criterion: Dict[st
     return _CRITERION_MATCH_CACHE[cache_key]
 
 
+def _criterion_has_global_instance_support(criterion: Dict[str, Any], graph: Dict[str, Any]) -> bool:
+    cache_key = (criterion["criterion_key"], criterion["target_root"])
+    if cache_key in _CRITERION_GLOBAL_SUPPORT_CACHE:
+        return _CRITERION_GLOBAL_SUPPORT_CACHE[cache_key]
+
+    for seed_node in _members_of_class(criterion["start_class"], graph):
+        discovered = _discover_criterion_matches_for_seed_node(seed_node, criterion, graph)
+        if discovered:
+            _CRITERION_GLOBAL_SUPPORT_CACHE[cache_key] = True
+            return True
+
+    _CRITERION_GLOBAL_SUPPORT_CACHE[cache_key] = False
+    return False
+
+
 def _summarize_criterion_paths(
     criterion_model: Dict[str, Any],
     target_node: str,
@@ -906,7 +1006,7 @@ def _score_seed_against_candidates_with_criteria(
             "has_active_criteria": False,
         }
 
-    criteria = _extract_seed_criteria(seed["start_class"], target_root, tbox, MAX_PATH_LENGTH)
+    criteria = _extract_seed_criteria(seed["start_class"], target_root, tbox, graph, MAX_PATH_LENGTH)
     if not criteria:
         return {
             "fit_scores": {},
@@ -936,11 +1036,12 @@ def _score_seed_against_candidates_with_criteria(
             target_node: (count / max_count if max_count > 0 else 0.0)
             for target_node, count in path_counts.items()
         }
-        globally_missing = max_count == 0
-        if not globally_missing:
+        globally_missing = not _criterion_has_global_instance_support(criterion, graph)
+        if INCLUDE_GLOBALLY_MISSING_IN_SCORE or not globally_missing:
             active_weight_raw_total += criterion["weight_raw"]
         criterion_model = {
             **criterion,
+            "signature": _criterion_signature(seed.get("display_start_class", seed["start_class"]), criterion["steps"], tbox),
             "path_counts": path_counts,
             "normalized_scores": normalized_scores,
             "globally_missing": globally_missing,
@@ -950,7 +1051,7 @@ def _score_seed_against_candidates_with_criteria(
         criterion_models.append(criterion_model)
 
     for criterion_model in criterion_models:
-        if criterion_model["globally_missing"]:
+        if criterion_model["globally_missing"] and not INCLUDE_GLOBALLY_MISSING_IN_SCORE:
             criterion_model["path_weight"] = 0.0
         else:
             criterion_model["path_weight"] = (
@@ -999,7 +1100,9 @@ def _score_seed_against_candidates_with_criteria(
         "fit_scores": fit_scores,
         "criteria_models": criterion_models,
         "criterion_summaries": criterion_summaries,
-        "has_active_criteria": any(not criterion_model["globally_missing"] for criterion_model in criterion_models),
+        "has_active_criteria": bool(criterion_models) if INCLUDE_GLOBALLY_MISSING_IN_SCORE else any(
+            not criterion_model["globally_missing"] for criterion_model in criterion_models
+        ),
     }
 
 
@@ -1043,7 +1146,7 @@ def _build_result_payload_from_criteria(
         meta_items: List[Dict[str, Any]] = []
         rendered_group_paths: List[List[Dict[str, Any]]] = []
         for summary in summaries:
-            if summary["globally_missing"]:
+            if summary["globally_missing"] and not SHOW_GLOBALLY_MISSING_IN_ANALYSIS:
                 continue
             status = "globally missing" if summary["globally_missing"] else ("matched" if summary["path_count"] > 0 else "missing")
             meta_items.append(
@@ -1188,12 +1291,12 @@ def _discover_target_paths_for_seed_node(
 
     discovered: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     queue: deque[Tuple[str, List[Dict[str, Any]], Set[str], Tuple[str, ...]]] = deque()
-    seed_family = _semantic_family_class(_pick_node_class(seed_node, graph), graph)
-    initial_family_history = (seed_family,) if seed_family else tuple()
-    queue.append((seed_node, [], {seed_node}, initial_family_history))
+    seed_class = _pick_node_class(seed_node, graph)
+    initial_class_history = (seed_class,) if seed_class else tuple()
+    queue.append((seed_node, [], {seed_node}, initial_class_history))
 
     while queue:
-        current_node, steps, visited_nodes, family_history = queue.popleft()
+        current_node, steps, visited_nodes, class_history = queue.popleft()
         depth = len(steps)
         if depth > 0 and target_root in graph["individuals"].get(current_node, {}).get("all_types", set()):
             discovered[current_node].append(
@@ -1214,9 +1317,12 @@ def _discover_target_paths_for_seed_node(
             if neighbor_uri in visited_nodes:
                 continue
             target_class = _pick_node_class(neighbor_uri, graph)
-            neighbor_is_target = target_root in graph["individuals"].get(neighbor_uri, {}).get("all_types", set())
-            next_family = _semantic_family_class(target_class, graph)
-            if not neighbor_is_target and _would_reenter_semantic_family(family_history, next_family):
+            if _would_reenter_class_branch(
+                class_history,
+                target_class,
+                graph["ancestors"],
+                graph["direct_parents"],
+            ):
                 continue
             step = {
                 "from_node": current_node,
@@ -1228,10 +1334,8 @@ def _discover_target_paths_for_seed_node(
                 "source_class": _pick_node_class(current_node, graph),
                 "target_class": target_class,
             }
-            next_family_history = family_history
-            if next_family and (not family_history or next_family != family_history[-1]):
-                next_family_history = family_history + (next_family,)
-            queue.append((neighbor_uri, steps + [step], visited_nodes | {neighbor_uri}, next_family_history))
+            next_class_history = class_history + ((target_class,) if target_class else tuple())
+            queue.append((neighbor_uri, steps + [step], visited_nodes | {neighbor_uri}, next_class_history))
 
     _PATH_DISCOVERY_CACHE[cache_key] = {target_node: list(paths) for target_node, paths in discovered.items()}
     return _PATH_DISCOVERY_CACHE[cache_key]
@@ -1251,16 +1355,21 @@ def _prepare_seed(seed_payload: Dict[str, Any], graph: Dict[str, Any], index: in
         if value_uri not in graph["individuals"]:
             return None
         seed_nodes = [value_uri]
-        start_class = _pick_most_specific_class(value_uri, type_uri, graph)
+        # Keep the selected seed type for criterion extraction/scoring, but
+        # preserve the most specific matching class for user-facing XAI labels.
+        start_class = type_uri
+        display_start_class = _pick_most_specific_class(value_uri, type_uri, graph)
         value_label = _node_label(value_uri, graph)
     elif mode == "type":
         selected_class_uri = value_uri or type_uri
         seed_nodes = _members_of_class(selected_class_uri, graph)
         start_class = selected_class_uri
+        display_start_class = selected_class_uri
         value_label = _class_label(selected_class_uri, graph)
     elif mode == "class":
         seed_nodes = _members_of_class(type_uri, graph)
         start_class = type_uri
+        display_start_class = type_uri
         value_label = type_label
     else:
         return None
@@ -1283,6 +1392,7 @@ def _prepare_seed(seed_payload: Dict[str, Any], graph: Dict[str, Any], index: in
         "value_label": value_label,
         "seed_nodes": seed_nodes,
         "start_class": start_class,
+        "display_start_class": display_start_class,
         "importance": float(seed_payload.get("importance", 2.0) or 2.0),
         "fit_label": fit_label,
         "fit_title": f"{fit_label} - {descriptor}",
@@ -1570,7 +1680,7 @@ def build_flexible_ui_payload(query_payload: Dict[str, Any]) -> List[Dict[str, A
             duplicate_counts[seed["type_uri"]] += 1
 
     prepared_seeds = []
-    for index, seed_payload in enumerate(raw_seeds[:3]):
+    for index, seed_payload in enumerate(raw_seeds[:5]):
         prepared = _prepare_seed(seed_payload, graph, index, duplicate_counts)
         if prepared:
             prepared_seeds.append(prepared)

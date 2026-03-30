@@ -94,7 +94,7 @@
   <div class="app-container">
     <h1>CBRN Recommender</h1>
     <p class="subtitle">
-      Select up to 3 seeds, choose how to interpret them, and define the target output type.
+      Select up to 5 seeds, choose how to interpret them, and define the target output type.
     </p>
 
     <div class="layout">
@@ -221,12 +221,78 @@
                 </select>
               </div>
             </div>
+            <div class="seed-row" data-seed-index="3">
+              <div class="seed-row-header">
+                <div class="seed-row-title">Seed 4</div>
+                <button type="button" class="seed-remove-btn" data-remove-seed="3">Remove</button>
+              </div>
+              <label class="field-label" for="seedType3">Seed type</label>
+              <select id="seedType3" class="seed-type-select">
+                <option value="">-- select seed type --</option>
+              </select>
+              <div class="seed-type-help"></div>
+              <div class="seed-mode-wrap" style="display:none;">
+                <label class="field-label" for="seedMode3">Search by</label>
+                <select id="seedMode3" class="seed-mode-select" disabled>
+                  <option value="">-- select search mode --</option>
+                  <option value="individual">Individuals</option>
+                  <option value="class">Class</option>
+                  <option value="type">Types / subclasses</option>
+                </select>
+              </div>
+              <div class="seed-value-wrap" style="display:none;">
+                <label class="field-label seed-value-label" for="seedValue3">Seed value</label>
+                <select id="seedValue3" class="seed-value-select" disabled>
+                  <option value="">-- select value --</option>
+                </select>
+              </div>
+              <div class="seed-importance-wrap" style="display:none;">
+                <label class="field-label" for="seedImportance3">Importance</label>
+                <select id="seedImportance3" class="seed-importance-select">
+                  <option value="1">Good to have</option>
+                  <option value="2" selected>Important</option>
+                  <option value="3">Very important</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="seed-row" data-seed-index="4">
+              <div class="seed-row-header">
+                <div class="seed-row-title">Seed 5</div>
+                <button type="button" class="seed-remove-btn" data-remove-seed="4">Remove</button>
+              </div>
+              <label class="field-label" for="seedType4">Seed type</label>
+              <select id="seedType4" class="seed-type-select">
+                <option value="">-- select seed type --</option>
+              </select>
+              <div class="seed-type-help"></div>
+              <div class="seed-mode-wrap" style="display:none;">
+                <label class="field-label" for="seedMode4">Search by</label>
+                <select id="seedMode4" class="seed-mode-select" disabled>
+                  <option value="">-- select search mode --</option>
+                  <option value="individual">Individuals</option>
+                  <option value="class">Class</option>
+                  <option value="type">Types / subclasses</option>
+                </select>
+              </div>
+              <div class="seed-value-wrap" style="display:none;">
+                <label class="field-label seed-value-label" for="seedValue4">Seed value</label>
+                <select id="seedValue4" class="seed-value-select" disabled>
+                  <option value="">-- select value --</option>
+                </select>
+              </div>
+              <div class="seed-importance-wrap" style="display:none;">
+                <label class="field-label" for="seedImportance4">Importance</label>
+                <select id="seedImportance4" class="seed-importance-select">
+                  <option value="1">Good to have</option>
+                  <option value="2" selected>Important</option>
+                  <option value="3">Very important</option>
+                </select>
+              </div>
+            </div>
             <button id="addSeedBtn" type="button" class="seed-add-btn">+ Add seed</button>
           </div>
           <button id="runBtn" type="button" class="btn-primary">Run recommendation</button>
-          <div class="small-text">
-            This version uses TBox criteria extraction and ABox path-count scoring on individual targets.
-          </div>
         </div>
 
         <div class="panel" style="margin-top:8px;">
@@ -1032,25 +1098,6 @@ function renderResults(search) {
           clusterRow.appendChild(chip);
         });
 
-        const explainBlock = document.createElement("div");
-        explainBlock.className = "explain-block";
-        const exTitle = document.createElement("div");
-        exTitle.className = "explain-title";
-        exTitle.textContent = "Why this result?";
-        const exList = document.createElement("ul");
-        exList.className = "explain-list";
-        const exps = center.explanations_simple || [];
-        if (!exps.length) {
-          const li = document.createElement("li");
-          li.className = "explain-item";
-          li.textContent = "No detailed explanations returned.";
-          exList.appendChild(li);
-        } else {
-          buildExplanationList(exps, exList);
-        }
-        explainBlock.appendChild(exTitle);
-        explainBlock.appendChild(exList);
-
         const metaPathGroups = center.meta_path_groups || [];
         let metaPathDetails = null;
         if (metaPathGroups.length) {
@@ -1078,8 +1125,8 @@ function renderResults(search) {
             function appendMetaRow(item, parent) {
               const row = document.createElement("div");
               row.className = "graph-path";
-              const exampleText = item.example_text ? ` | example: ${item.example_text}` : "";
-              row.textContent = `${item.signature} | shortest path: ${item.shortest_length} | support: ${item.support_count} (${item.support_ratio}) | PCRW: ${item.raw_pcrw} | normalized PCRW: ${item.normalized_pcrw} | path weight: ${item.path_weight} | contribution: ${item.contribution_0_10}/10${exampleText}`;
+              const pathCount = typeof item.path_count === "number" ? item.path_count : 0;
+              row.textContent = `${item.signature} | path count: ${pathCount} | contribution: ${item.contribution_0_10}/10`;
               parent.appendChild(row);
             }
 
@@ -1117,31 +1164,11 @@ function renderResults(search) {
           justDetails.appendChild(sum);
         }
 
-        function renderMetaPath(container, pathSteps) {
-          // pathSteps: [{kind:"node"/"pred", label, dir?}, ...]
-          pathSteps.forEach((st, idx) => {
-            const span = document.createElement("span");
-            if (st.kind === "pred") {
-              span.className = "path-pred";
-              span.textContent = `[${st.label}]`;
-            } else {
-              span.className = "path-step";
-              span.textContent = st.label;
-            }
-            container.appendChild(span);
-
-            if (idx < pathSteps.length - 1) {
-              const next = pathSteps[idx + 1];
-              const arrow = document.createElement("span");
-              let isRev = false;
-              // If the relationship is inverse, show the arrow in reverse direction (same glyph, rotated)
-              if (st.kind === "pred" && st.dir === "reverse") isRev = true;
-              if (next && next.kind === "pred" && next.dir === "reverse") isRev = true;
-              arrow.className = "path-arrow" + (isRev ? " rev" : "");
-              arrow.textContent = isRev ? "<-" : "->";
-              container.appendChild(arrow);
-            }
-          });
+        function pathStepsToText(pathSteps) {
+          return (pathSteps || []).map((st) => {
+            if (st.kind === "pred") return `[${st.label}]`;
+            return st.label;
+          }).join(" -> ");
         }
 
         if (groups.length) {
@@ -1163,10 +1190,7 @@ function renderResults(search) {
             shown.forEach((pSteps) => {
               const p = document.createElement("div");
               p.className = "graph-path";
-              const bullet = document.createElement("span");
-              bullet.textContent = "- ";
-              p.appendChild(bullet);
-              renderMetaPath(p, pSteps);
+              p.textContent = pathStepsToText(pSteps);
               listWrap.appendChild(p);
             });
 
@@ -1184,10 +1208,7 @@ function renderResults(search) {
               all.slice(maxShown).forEach((pSteps) => {
                 const p = document.createElement("div");
                 p.className = "graph-path";
-                const bullet = document.createElement("span");
-                bullet.textContent = "- ";
-                p.appendChild(bullet);
-                renderMetaPath(p, pSteps);
+                p.textContent = pathStepsToText(pSteps);
                 hiddenWrap.appendChild(p);
               });
 
@@ -1283,7 +1304,6 @@ function renderResults(search) {
 
         card.appendChild(header);
         card.appendChild(clusterRow);
-        card.appendChild(explainBlock);
         if (metaPathDetails) {
           card.appendChild(metaPathDetails);
         }
