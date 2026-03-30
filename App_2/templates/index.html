@@ -1,0 +1,1374 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>CBRN Recommender</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    * { box-sizing: border-box; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; padding: 16px; background: #f5f5f5; color: #111827; }
+    .app-container { max-width: 1200px; margin: 0 auto; background: #ffffff; border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.05); padding: 16px 20px 20px; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    .subtitle { margin: 0 0 12px; font-size: 13px; color: #4b5563; }
+    .layout { display: grid; grid-template-columns: 0.35fr 0.65fr; gap: 16px; }
+    @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+    .panel { border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px 12px 12px; background: #ffffff; }
+    .panel-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+    .field-group { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+    .field-label { font-size: 13px; margin-bottom: 2px; }
+    .seed-row { border: 1px solid #e5e7eb; border-radius: 6px; padding: 8px; background: #fafafa; margin-top: 6px; }
+    .seed-row:first-of-type { margin-top: 14px; }
+    .seed-row-title { font-size: 12px; font-weight: 600; color: #374151; margin-bottom: 6px; }
+    .seed-row-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+    .seed-type-help { display: none; margin-top: 4px; padding: 6px 8px; border-radius: 4px; border: 1px solid #e5e7eb; background: #f9fafb; font-size: 11px; color: #4b5563; line-height: 1.4; }
+    .seed-remove-btn, .seed-add-btn { border-radius: 4px; border: 1px solid #d1d5db; background: #ffffff; color: #374151; cursor: pointer; }
+    .seed-remove-btn { padding: 3px 8px; font-size: 11px; }
+    .seed-add-btn { margin-top: 8px; padding: 6px 10px; font-size: 12px; }
+    .seed-remove-btn:hover, .seed-add-btn:hover { background: #f9fafb; }
+    select { width: 100%; padding: 6px 8px; border-radius: 4px; border: 1px solid #d1d5db;
+      font-size: 13px; background: white; }
+    select:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 1px #2563eb; }
+    .btn-primary { margin-top: 10px; padding: 6px 14px; border-radius: 4px; border: none;
+      background: #2563eb; color: white; font-size: 13px; cursor: pointer; }
+    .small-text { font-size: 12px; color: #6b7280; margin-top: 4px; }
+    .previous-list, .feedback-list { list-style: none; margin: 4px 0 0; padding: 0; max-height: 140px;
+      overflow-y: auto; font-size: 12px; }
+    .previous-item { padding: 4px 6px; border-radius: 4px; border: 1px solid #e5e7eb; margin-bottom: 4px;
+      cursor: pointer; background: #f9fafb; }
+    .previous-item:hover { background: #eff6ff; border-color: #bfdbfe; }
+    .previous-title { font-weight: 600; font-size: 12px; }
+    .previous-meta { font-size: 11px; color: #6b7280; }
+    .feedback-item { border-bottom: 1px solid #e5e7eb; padding: 3px 0; }
+    .feedback-item:last-child { border-bottom: none; }
+    .feedback-line { font-size: 12px; }
+    .feedback-meta { font-size: 11px; color: #6b7280; }
+    .results-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+    .results-title { font-size: 14px; font-weight: 600; }
+    .results-summary { font-size: 12px; color: #6b7280; }
+    .results-container { display: flex; flex-direction: column; gap: 8px; max-height: 540px; overflow-y: auto; padding-right: 2px; }
+    .empty-state { padding: 8px 10px; border-radius: 4px; border: 1px dashed #d1d5db; font-size: 13px; color: #6b7280; background: #f9fafb; }
+    .center-card { border: 1px solid #e5e7eb; border-radius: 6px; padding: 8px 9px 9px; background: #ffffff; font-size: 13px; }
+    .center-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 4px; }
+    .center-name { font-weight: 600; margin-bottom: 2px; }
+    .center-meta { font-size: 12px; color: #6b7280; }
+    .score-pill { min-width: 80px; border-radius: 4px; border: 1px solid #bfdbfe; background: #eff6ff;
+      padding: 4px 6px; text-align: right; font-size: 11px; }
+    .score-pill .value { font-size: 14px; font-weight: 600; display: block; }
+    .cluster-row { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 4px; }
+    .cluster-chip { border-radius: 999px; border: 1px solid #d1d5db; padding: 2px 8px; font-size: 11px;
+      color: #374151; background: #f9fafb; }
+    .metrics-row { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 4px; }
+    .metric-chip { border-radius: 999px; border: 1px solid #e5e7eb; padding: 2px 6px; font-size: 11px;
+      color: #4b5563; background: #f9fafb; }
+    .metric-strong { border-color: #bfdbfe; background: #eff6ff; }
+    .explain-block { border-radius: 4px; border: 1px solid #e5e7eb; padding: 6px 7px; background: #f9fafb; margin-top: 4px; }
+    .explain-title { font-size: 12px; font-weight: 600; margin-bottom: 2px; }
+    .explain-list { list-style: none; margin: 2px 0 0; padding: 0; font-size: 12px; }
+    .explain-item { margin-bottom: 2px; }
+    .explain-criterion { font-weight: 600; display: inline; margin-right: 4px; }
+    .explain-text { display: inline; }
+    .explain-toggle { border: none; background: none; color: #2563eb; cursor: pointer; font-size: 12px; padding-left: 4px; }
+
+    details.just-details { margin-top: 2px; font-size: 11px; }
+    .graph-path { border-radius: 3px; border: 1px solid #e5e7eb; padding: 2px 4px; margin-top: 2px; background: #ffffff; }
+    .path-step { display: inline-block; padding: 2px 6px; background: #e0e7ff; border-radius: 4px; color: #3730a3; font-weight: 500; }
+    
+
+    .path-pred { display: inline-block; padding: 0 2px; background: transparent; border-radius: 0; color: #111827; font-weight: 600; }
+    .just-group-title { margin-top: 10px; font-weight: 700; color: #1e3a8a; } /* slightly darker blue */
+    .path-arrow.rev { display: inline-block; transform: none; }
+    .just-more-btn { margin-top: 6px; padding: 2px 4px; border: none; background: transparent; color: #3730a3; border-radius: 6px; font-size: 12px; cursor: pointer; text-decoration: none; }
+    .just-more-btn:hover { filter: brightness(0.98); }
+.path-arrow { color: #9ca3af; padding: 0 4px; vertical-align: middle; display: inline-block; }
+    .rating-row { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-top: 4px; font-size: 11px; }
+    .rating-label { color: #4b5563; }
+    .rating-buttons { display: inline-flex; gap: 4px; }
+    .rating-btn { border-radius: 999px; padding: 2px 8px; font-size: 11px; border: 1px solid #d1d5db; background: #ffffff; cursor: pointer; }
+    .rating-btn.active { border-color: #2563eb; background: #eff6ff; color: #1d4ed8; font-weight: 600; }
+    .rating-btn.bad.active { border-color: #dc2626; background: #fee2e2; color: #b91c1c; }
+    .rating-btn.good.active { border-color: #16a34a; background: #dcfce7; color: #15803d; }
+  </style>
+</head>
+<body>
+  <div class="app-container">
+    <h1>CBRN Recommender</h1>
+    <p class="subtitle">
+      Select up to 3 seeds, choose how to interpret them, and define the target output type.
+    </p>
+
+    <div class="layout">
+      <div>
+        <div class="panel">
+          <div class="panel-title">Inputs</div>
+          <div class="field-group">
+            <div>
+              <label class="field-label" for="targetTypeSelect">Target class</label>
+              <select id="targetTypeSelect">
+                <option value="">-- select --</option>
+              </select>
+            </div>
+
+            <div id="targetModeWrap" style="display:none;">
+              <label class="field-label" for="targetModeSelect">Recommend</label>
+              <select id="targetModeSelect" disabled>
+                <option value="individual">Individuals</option>
+                <option value="type">Types / subclasses</option>
+              </select>
+            </div>
+
+            <div class="seed-row" data-seed-index="0">
+              <div class="seed-row-header">
+                <div class="seed-row-title">Seed 1</div>
+                <button type="button" class="seed-remove-btn" data-remove-seed="0" style="display:none;">Remove</button>
+              </div>
+              <label class="field-label" for="seedType0">Seed type</label>
+              <select id="seedType0" class="seed-type-select">
+                <option value="">-- select seed type --</option>
+              </select>
+              <div class="seed-type-help"></div>
+              <div class="seed-mode-wrap" style="display:none;">
+                <label class="field-label" for="seedMode0">Search by</label>
+                <select id="seedMode0" class="seed-mode-select" disabled>
+                  <option value="">-- select search mode --</option>
+                  <option value="individual">Individuals</option>
+                  <option value="class">Class</option>
+                  <option value="type">Types / subclasses</option>
+                </select>
+              </div>
+              <div class="seed-value-wrap" style="display:none;">
+                <label class="field-label seed-value-label" for="seedValue0">Seed value</label>
+                <select id="seedValue0" class="seed-value-select" disabled>
+                  <option value="">-- select value --</option>
+                </select>
+              </div>
+              <div class="seed-importance-wrap" style="display:none;">
+                <label class="field-label" for="seedImportance0">Importance</label>
+                <select id="seedImportance0" class="seed-importance-select">
+                  <option value="1">Good to have</option>
+                  <option value="2" selected>Important</option>
+                  <option value="3">Very important</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="seed-row" data-seed-index="1">
+              <div class="seed-row-header">
+                <div class="seed-row-title">Seed 2</div>
+                <button type="button" class="seed-remove-btn" data-remove-seed="1">Remove</button>
+              </div>
+              <label class="field-label" for="seedType1">Seed type</label>
+              <select id="seedType1" class="seed-type-select">
+                <option value="">-- select seed type --</option>
+              </select>
+              <div class="seed-type-help"></div>
+              <div class="seed-mode-wrap" style="display:none;">
+                <label class="field-label" for="seedMode1">Search by</label>
+                <select id="seedMode1" class="seed-mode-select" disabled>
+                  <option value="">-- select search mode --</option>
+                  <option value="individual">Individuals</option>
+                  <option value="class">Class</option>
+                  <option value="type">Types / subclasses</option>
+                </select>
+              </div>
+              <div class="seed-value-wrap" style="display:none;">
+                <label class="field-label seed-value-label" for="seedValue1">Seed value</label>
+                <select id="seedValue1" class="seed-value-select" disabled>
+                  <option value="">-- select value --</option>
+                </select>
+              </div>
+              <div class="seed-importance-wrap" style="display:none;">
+                <label class="field-label" for="seedImportance1">Importance</label>
+                <select id="seedImportance1" class="seed-importance-select">
+                  <option value="1">Good to have</option>
+                  <option value="2" selected>Important</option>
+                  <option value="3">Very important</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="seed-row" data-seed-index="2">
+              <div class="seed-row-header">
+                <div class="seed-row-title">Seed 3</div>
+                <button type="button" class="seed-remove-btn" data-remove-seed="2">Remove</button>
+              </div>
+              <label class="field-label" for="seedType2">Seed type</label>
+              <select id="seedType2" class="seed-type-select">
+                <option value="">-- select seed type --</option>
+              </select>
+              <div class="seed-type-help"></div>
+              <div class="seed-mode-wrap" style="display:none;">
+                <label class="field-label" for="seedMode2">Search by</label>
+                <select id="seedMode2" class="seed-mode-select" disabled>
+                  <option value="">-- select search mode --</option>
+                  <option value="individual">Individuals</option>
+                  <option value="class">Class</option>
+                  <option value="type">Types / subclasses</option>
+                </select>
+              </div>
+              <div class="seed-value-wrap" style="display:none;">
+                <label class="field-label seed-value-label" for="seedValue2">Seed value</label>
+                <select id="seedValue2" class="seed-value-select" disabled>
+                  <option value="">-- select value --</option>
+                </select>
+              </div>
+              <div class="seed-importance-wrap" style="display:none;">
+                <label class="field-label" for="seedImportance2">Importance</label>
+                <select id="seedImportance2" class="seed-importance-select">
+                  <option value="1">Good to have</option>
+                  <option value="2" selected>Important</option>
+                  <option value="3">Very important</option>
+                </select>
+              </div>
+            </div>
+            <button id="addSeedBtn" type="button" class="seed-add-btn">+ Add seed</button>
+          </div>
+          <button id="runBtn" type="button" class="btn-primary">Run recommendation</button>
+          <div class="small-text">
+            This version uses TBox criteria extraction and ABox path-count scoring on individual targets.
+          </div>
+        </div>
+
+        <div class="panel" style="margin-top:8px;">
+          <div class="panel-title">Previous searches</div>
+          <ul id="previousList" class="previous-list">
+            <li class="small-text">No previous runs yet.</li>
+          </ul>
+        </div>
+
+      </div>
+
+      <div class="panel">
+        <div class="results-header">
+          <div class="results-title">Recommendations</div>
+          <div id="resultsSummary" class="results-summary">
+            Choose inputs and click "Run recommendation".
+          </div>
+        </div>
+        <div id="resultsContainer" class="results-container">
+          <div class="empty-state">
+            No results yet. This panel will display ranked results with criterion-based scores, explanations, and justification paths.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const _rb = document.getElementById('runBtn');
+      if (!_rb) { console.error('runBtn not found in DOM'); return; }
+
+    const targetTypeSelect = document.getElementById("targetTypeSelect");
+    const targetModeWrap = document.getElementById("targetModeWrap");
+    const targetModeSelect = document.getElementById("targetModeSelect");
+    const seedRows = Array.from(document.querySelectorAll(".seed-row"));
+    const seedRemoveBtns = seedRows.map(row => row.querySelector(".seed-remove-btn"));
+    const seedTypeSelects = seedRows.map(row => row.querySelector(".seed-type-select"));
+    const seedTypeHelpBoxes = seedRows.map(row => row.querySelector(".seed-type-help"));
+    const seedModeWraps = seedRows.map(row => row.querySelector(".seed-mode-wrap"));
+    const seedModeSelects = seedRows.map(row => row.querySelector(".seed-mode-select"));
+    const seedValueWraps = seedRows.map(row => row.querySelector(".seed-value-wrap"));
+    const seedValueLabels = seedRows.map(row => row.querySelector(".seed-value-label"));
+    const seedValueSelects = seedRows.map(row => row.querySelector(".seed-value-select"));
+    const seedImportanceWraps = seedRows.map(row => row.querySelector(".seed-importance-wrap"));
+    const seedImportanceSelects = seedRows.map(row => row.querySelector(".seed-importance-select"));
+    const addSeedBtn = document.getElementById("addSeedBtn");
+    const runBtn = document.getElementById("runBtn");
+    const resultsSummary = document.getElementById("resultsSummary");
+    const resultsContainer = document.getElementById("resultsContainer");
+    const previousList = document.getElementById("previousList");
+    const feedbackList = document.getElementById("feedbackList");
+
+    let previousSearches = [];
+    let feedbackEntries = [];
+    let currentSearch = null;
+    let seedTypeMeta = {};
+    let targetTypeMeta = {};
+    const valueCache = {};
+
+    function classLabel(classKey, metaMap) {
+      return (metaMap[classKey] && metaMap[classKey].label) || classKey || "";
+    }
+
+    function targetShortText(targetType, targetMode) {
+      const label = classLabel(targetType, targetTypeMeta) || "Target";
+      return targetMode === "type" ? `${label} [types]` : label;
+    }
+
+    function seedShortText(seed) {
+      if (!seed) return "";
+      const label = classLabel(seed.type, seedTypeMeta) || seed.type;
+      const modeSuffix = seed.mode === "type" ? " [type]" : (seed.mode === "class" ? " [class]" : "");
+      const valueText = seed.mode === "class" ? label : seed.label;
+      return `${label}${modeSuffix}: ${valueText}`;
+    }
+
+    function buildSearchTitle(search) {
+      const seeds = search.seeds || [];
+      const target = targetShortText(search.target_type || "TrainingCentre", search.target_mode || "individual");
+      if (!seeds.length) {
+        const tech = search.technology || "";
+        const scen = search.scenario || "";
+        const base = (tech || scen) ? `${tech} Γ— ${scen}` : "No seeds";
+        return `${base} -> ${target}`;
+      }
+      const seedText = seeds.map(seedShortText).join(" | ");
+      return `${seedText} -> ${target}`;
+    }
+
+    function collectSeeds() {
+      const seeds = [];
+      let hasPartialRow = false;
+      for (let i = 0; i < seedRows.length; i += 1) {
+        if (seedRows[i].style.display === "none") continue;
+        const type = seedTypeSelects[i].value;
+        const mode = seedModeSelects[i].value;
+        const valueSelect = seedValueSelects[i];
+        const meta = seedTypeMeta[type] || {};
+        const label = mode === "class" ? (meta.label || type) : valueSelect.value;
+        const selectedOption = valueSelect.options[valueSelect.selectedIndex];
+        const importance = Number(seedImportanceSelects[i].value || "2");
+        if (!type && !mode && !label) continue;
+        if (!type || !mode || (mode !== "class" && !label)) {
+          hasPartialRow = true;
+          continue;
+        }
+        seeds.push({
+          type,
+          mode,
+          label,
+          value_uri: mode === "class" ? (meta.class_uri || "") : (selectedOption ? selectedOption.dataset.uri || "" : ""),
+          value_key: mode === "class" ? type : (selectedOption ? selectedOption.dataset.key || "" : ""),
+          importance,
+        });
+      }
+      return { seeds, hasPartialRow };
+    }
+
+    function visibleSeedIndices() {
+      return seedRows
+        .map((row, idx) => ({ row, idx }))
+        .filter(({ row }) => row.style.display !== "none")
+        .map(({ idx }) => idx);
+    }
+
+    function visibleSeedCount() {
+      return visibleSeedIndices().length;
+    }
+
+    function resetSeedRow(idx) {
+      seedTypeSelects[idx].value = "";
+      seedTypeHelpBoxes[idx].style.display = "none";
+      seedTypeHelpBoxes[idx].textContent = "";
+      setSeedModeUI(idx, null, "");
+      hideSeedValueUI(idx);
+      setSeedImportanceUI(idx, false);
+      seedImportanceSelects[idx].value = "2";
+    }
+
+    function updateSeedTypeHelp(idx, classKey) {
+      const helpBox = seedTypeHelpBoxes[idx];
+      const meta = seedTypeMeta[classKey];
+      if (!classKey || !meta) {
+        helpBox.style.display = "none";
+        helpBox.textContent = "";
+        return;
+      }
+      const description = meta.description || "There is no definition for this class.";
+      helpBox.textContent = description;
+      helpBox.style.display = "block";
+    }
+
+    function optionText(item) {
+      if (!item) return "";
+      if (item.disabled) {
+        return `${item.label} — unavailable`;
+      }
+      return item.label;
+    }
+
+    function appendSelectOption(selectEl, item, config = {}) {
+      const opt = document.createElement("option");
+      const useKeyValue = !!config.useKeyValue;
+      opt.value = useKeyValue ? (item.key || item.label) : item.label;
+      opt.textContent = optionText(item);
+      if (item.uri) opt.dataset.uri = item.uri;
+      if (item.key) opt.dataset.key = item.key;
+      if (item.disabled) {
+        opt.disabled = true;
+        opt.dataset.disabledReason = item.disabled_reason || "";
+      }
+      selectEl.appendChild(opt);
+    }
+
+    function getSeedRowState(idx) {
+      return {
+        type: seedTypeSelects[idx].value,
+        mode: seedModeSelects[idx].value,
+        value: seedValueSelects[idx].value,
+        importance: seedImportanceSelects[idx].value || "2",
+      };
+    }
+
+    function applySeedRowState(idx, state) {
+      resetSeedRow(idx);
+      if (!state || !state.type) return;
+      seedTypeSelects[idx].value = state.type || "";
+      updateSeedTypeHelp(idx, state.type || "");
+      seedImportanceSelects[idx].value = state.importance || "2";
+      const meta = seedTypeMeta[state.type || ""];
+      const mode = setSeedModeUI(idx, meta, state.mode || "");
+      if (mode) {
+        return loadValuesForSeed(idx, state.type || "", mode, state.value || "");
+      }
+      return Promise.resolve();
+    }
+
+    function updateSeedControlsUI() {
+      const count = visibleSeedCount();
+      seedRows.forEach((row, idx) => {
+        const visible = row.style.display !== "none";
+        seedRemoveBtns[idx].style.display = visible && count > 1 ? "inline-block" : "none";
+      });
+      addSeedBtn.style.display = count < seedRows.length ? "inline-block" : "none";
+    }
+
+    function setVisibleSeedCount(count) {
+      const safeCount = Math.max(1, Math.min(seedRows.length, count));
+      seedRows.forEach((row, idx) => {
+        const visible = idx < safeCount;
+        row.style.display = visible ? "block" : "none";
+        if (!visible) {
+          resetSeedRow(idx);
+        }
+      });
+      updateSeedControlsUI();
+    }
+
+    function removeSeedAt(removeIdx) {
+      const states = visibleSeedIndices()
+        .filter(idx => idx !== removeIdx)
+        .map(idx => getSeedRowState(idx));
+      setVisibleSeedCount(Math.max(1, states.length));
+      states.forEach((state, idx) => {
+        applySeedRowState(idx, state);
+      });
+    }
+    function renderPreviousSearches() {
+      previousList.innerHTML = "";
+      if (!previousSearches.length) {
+        const li = document.createElement("li");
+        li.className = "small-text";
+        li.textContent = "No previous runs yet.";
+        previousList.appendChild(li);
+        return;
+      }
+      previousSearches.forEach((s, idx) => {
+        const li = document.createElement("li");
+        li.className = "previous-item";
+        const title = document.createElement("div");
+        title.className = "previous-title";
+        title.textContent = `${idx + 1}. ${buildSearchTitle(s)}`;
+        const meta = document.createElement("div");
+        meta.className = "previous-meta";
+        meta.textContent = `${s.results.length} results β€Ά ${s.ts}`;
+        li.appendChild(title);
+        li.appendChild(meta);
+        li.addEventListener("click", () => {
+          currentSearch = s;
+          applySearchToInputs(s);
+          renderResults(s);
+        });
+        previousList.appendChild(li);
+      });
+    }
+
+    function renderFeedbackLog() {
+      if (!feedbackList) return;
+      feedbackList.innerHTML = "";
+      if (!feedbackEntries.length) {
+        const li = document.createElement("li");
+        li.className = "small-text";
+        li.textContent = "No feedback yet.";
+        feedbackList.appendChild(li);
+        return;
+      }
+      feedbackEntries.slice(0, 20).forEach((f) => {
+        const li = document.createElement("li");
+        li.className = "feedback-item";
+        const line = document.createElement("div");
+        line.className = "feedback-line";
+        line.innerHTML = `<strong>${f.rating}</strong> β€“ ${f.center_label}`;
+        const meta = document.createElement("div");
+        meta.className = "feedback-meta";
+        meta.textContent = `${f.query_title || "Query"} β€Ά ${f.ts}`;
+        li.appendChild(line);
+        li.appendChild(meta);
+        feedbackList.appendChild(li);
+      });
+    }
+
+    function formatScore10(val) {
+      if (typeof val !== "number" || isNaN(val)) return "0.0";
+      return val.toFixed(1);
+    }
+
+    
+    const SCORE_TOOLTIPS = {
+      "Operational fit":
+        "Overall Operational score based on how strongly the centre matches the selected technology and scenario, using Tech use, Tech training, Incident coverage, and Threat capability.",
+      "Training capacity":
+        "Overall training capacity score based on the total number of courses and disciplines the centre has.",
+      "Infrastructure & networks":
+        "Overall Infrastructure & Networks score based on the total number of facilities and networks linked to the centre.",
+      "Tech use":
+        "Whether the centre uses the selected technology.",
+      "Tech training":
+        "How many training courses the centre provides that train on the selected technology.",
+      "Threat capability":
+        "Whether the selected technology is used by the center and addresses threats involved in the selected scenario.",
+      "Incident coverage":
+        "How many incidents linked to the selected scenario the centre tackles.",
+      "Facilities":
+        "How many facilities the centre has.",
+      "Disciplines":
+        "How many disciplines the centre covers [ Biological (B), Chemical (C), Radiological/Nuclear (RN) ].",
+      "Courses":
+        "How many courses the center offers.",
+      "Networks":
+        "How many networks the centre is linked to.",
+    };
+
+    const EXPLANATION_CONFIG = {
+      "Technology Use": {
+        title: "Tech use",
+        prefix: "This centre uses the following technologies relevant to your selection: ",
+        moreLabel: "technologies",
+      },
+      "Technology Training": {
+        title: "Tech training",
+        prefix: "This centre provides training that uses the following technologies: ",
+        moreLabel: "technologies",
+      },
+      "Threat Capability": {
+        title: "Threat capability",
+        prefix: "This centre has capabilities related to the following CBRN threats: ",
+        moreLabel: "threats",
+      },
+      "Incident Coverage": {
+        title: "Incident coverage",
+        prefix: "This centre covers the following incident types: ",
+        moreLabel: "incidents",
+      },
+      "Facility Match": {
+        title: "Facilities",
+        prefix: "This centre provides relevant facilities such as: ",
+        moreLabel: "facilities",
+      },
+      "Discipline Match": {
+        title: "Disciplines",
+        prefix: "This centre covers the following disciplines: ",
+        moreLabel: "disciplines",
+      },
+      "Training Capability": {
+        title: "Courses",
+        prefix: "This centre offers the following relevant courses: ",
+        moreLabel: "courses",
+      },
+      "Network Links": {
+        title: "Networks",
+        prefix: "This centre is connected with the following networks: ",
+        moreLabel: "networks",
+      },
+    };
+
+    const EXPLANATION_ORDER = [
+      "Technology Use",
+      "Technology Training",
+      "Threat Capability",
+      "Incident Coverage",
+      "Facility Match",
+      "Discipline Match",
+      "Training Capability",
+      "Network Links",
+    ];
+
+    function buildExplanationList(exps, exList) {
+      const groups = {};
+      exps.forEach((e) => {
+        const crit = e.criterion || "Other";
+        const itemText = e.text || e.entity || "";
+        if (!itemText) return;
+        if (!groups[crit]) groups[crit] = [];
+        if (!groups[crit].includes(itemText)) {
+          groups[crit].push(itemText);
+        }
+      });
+
+      const seen = new Set();
+      const orderedCriteria = [];
+      EXPLANATION_ORDER.forEach((c) => {
+        if (groups[c]) {
+          orderedCriteria.push(c);
+          seen.add(c);
+        }
+      });
+      Object.keys(groups).forEach((c) => {
+        if (!seen.has(c)) orderedCriteria.push(c);
+      });
+
+      orderedCriteria.forEach((crit) => {
+        const entities = groups[crit];
+        if (!entities || !entities.length) return;
+        const cfg = EXPLANATION_CONFIG[crit] || {
+          title: crit,
+          prefix: "",
+          moreLabel: "items",
+        };
+
+        const li = document.createElement("li");
+        li.className = "explain-item";
+
+        const labelEl = document.createElement("div");
+        labelEl.className = "explain-criterion";
+        labelEl.textContent = cfg.title + ":";
+
+        const textEl = document.createElement("div");
+        textEl.className = "explain-text";
+
+        const maxShown = 4;
+        const allLabels = entities.slice();
+        const shown = allLabels.slice(0, maxShown);
+        const remaining = allLabels.length - shown.length;
+
+        const basePrefix = cfg.prefix || "";
+        function renderLines(lines) {
+          textEl.innerHTML = "";
+          lines.forEach((line, idx) => {
+            const row = document.createElement("div");
+            row.textContent = `${idx === 0 && basePrefix ? basePrefix : ""}- ${line}`;
+            textEl.appendChild(row);
+          });
+        }
+
+        renderLines(shown);
+
+        if (remaining > 0) {
+          const moreBtn = document.createElement("button");
+          moreBtn.type = "button";
+          moreBtn.className = "explain-toggle";
+          moreBtn.setAttribute("data-expanded", "0");
+          moreBtn.textContent = ` and ${remaining} more ${cfg.moreLabel}`;
+          moreBtn.addEventListener("click", () => {
+            const expanded = moreBtn.getAttribute("data-expanded") === "1";
+            if (!expanded) {
+              renderLines(allLabels);
+              moreBtn.textContent = " show less";
+              moreBtn.setAttribute("data-expanded", "1");
+            } else {
+              renderLines(shown);
+              moreBtn.textContent = ` and ${remaining} more ${cfg.moreLabel}`;
+              moreBtn.setAttribute("data-expanded", "0");
+            }
+          });
+          textEl.appendChild(moreBtn);
+        }
+
+        li.appendChild(labelEl);
+        li.appendChild(textEl);
+        exList.appendChild(li);
+      });
+    }
+
+    function setTargetModeUI(meta, selectedMode) {
+      const modes = (meta && meta.available_target_modes) || ["individual"];
+      const hasSwitch = !!(meta && meta.show_target_mode_switch);
+      const defaultMode = (meta && meta.default_target_mode) || modes[0] || "individual";
+      const nextMode = modes.includes(selectedMode) ? selectedMode : defaultMode;
+
+      targetModeSelect.innerHTML = "";
+      modes.forEach((mode) => {
+        const opt = document.createElement("option");
+        opt.value = mode;
+        opt.textContent = mode === "type" ? "Types / subclasses" : "Individuals";
+        targetModeSelect.appendChild(opt);
+      });
+      targetModeSelect.value = nextMode;
+      targetModeSelect.disabled = !modes.length;
+      targetModeWrap.style.display = hasSwitch ? "block" : "none";
+      return nextMode;
+    }
+
+    function hideSeedValueUI(idx) {
+      seedValueWraps[idx].style.display = "none";
+      seedValueLabels[idx].textContent = "Seed value";
+      seedValueSelects[idx].innerHTML = '<option value="">-- select value --</option>';
+      seedValueSelects[idx].disabled = true;
+    }
+
+    function setSeedImportanceUI(idx, visible) {
+      seedImportanceWraps[idx].style.display = visible ? "block" : "none";
+      if (!visible) {
+        seedImportanceSelects[idx].value = "2";
+      }
+    }
+
+    function setSeedModeUI(idx, meta, selectedMode) {
+      const wrap = seedModeWraps[idx];
+      const modeSelect = seedModeSelects[idx];
+      const valueLabel = seedValueLabels[idx];
+      if (!meta) {
+        modeSelect.innerHTML = '<option value="">-- select search mode --</option>';
+        modeSelect.value = "";
+        modeSelect.disabled = true;
+        wrap.style.display = "none";
+        valueLabel.textContent = "Seed value";
+        return "";
+      }
+      const modes = (meta && meta.available_seed_modes) || ["individual"];
+      const hasSwitch = !!(meta && meta.show_seed_mode_switch);
+      const autoMode = !hasSwitch && modes.length === 1 ? modes[0] : "";
+      const nextMode = modes.includes(selectedMode) ? selectedMode : autoMode;
+
+      modeSelect.innerHTML = '<option value="">-- select search mode --</option>';
+      modes.forEach((mode) => {
+        const opt = document.createElement("option");
+        opt.value = mode;
+        if (mode === "type") {
+          opt.textContent = "Types / subclasses";
+        } else if (mode === "class") {
+          opt.textContent = "Class";
+        } else {
+          opt.textContent = "Individuals";
+        }
+        modeSelect.appendChild(opt);
+      });
+      modeSelect.value = nextMode;
+      modeSelect.disabled = !hasSwitch;
+      wrap.style.display = hasSwitch ? "block" : "none";
+      valueLabel.textContent = nextMode === "type" ? "Seed subtype" : "Seed value";
+      return nextMode;
+    }
+
+    function ensureDropdownRoom(selectEl) {
+      if (!selectEl || selectEl.disabled) return;
+      const rect = selectEl.getBoundingClientRect();
+      const minBelow = 320;
+      const spaceBelow = window.innerHeight - rect.bottom;
+      if (spaceBelow >= minBelow) return;
+      const missing = minBelow - spaceBelow;
+      if (missing > 0) {
+        window.scrollBy({ top: missing, left: 0, behavior: "auto" });
+      }
+    }
+
+    function fetchClassValues(classKey, mode) {
+      if (!classKey) return Promise.resolve([]);
+      const cacheKey = `${classKey}::${mode}`;
+      if (valueCache[cacheKey]) return Promise.resolve(valueCache[cacheKey]);
+      return fetch(`/api/class-values?class_key=${encodeURIComponent(classKey)}&mode=${encodeURIComponent(mode)}`)
+        .then(res => res.json())
+        .then(data => {
+          const list = data.values || [];
+          valueCache[cacheKey] = list;
+          return list;
+        });
+    }
+
+    function loadValuesForSeed(idx, classKey, mode, selectedValue) {
+      const valueSelect = seedValueSelects[idx];
+      if (!classKey || !mode) {
+        hideSeedValueUI(idx);
+        setSeedImportanceUI(idx, false);
+        return Promise.resolve();
+      }
+      if (mode === "class") {
+        hideSeedValueUI(idx);
+        setSeedImportanceUI(idx, true);
+        return Promise.resolve();
+      }
+      seedValueWraps[idx].style.display = "block";
+      valueSelect.disabled = true;
+      valueSelect.innerHTML = '<option value="">Loading...</option>';
+      return fetchClassValues(classKey, mode)
+        .then(values => {
+          const placeholder = mode === "type" ? "-- select subtype --" : "-- select value --";
+          valueSelect.innerHTML = `<option value="">${placeholder}</option>`;
+          values.forEach(item => {
+            appendSelectOption(valueSelect, item);
+          });
+          if (selectedValue && values.some(x => x.label === selectedValue && !x.disabled)) {
+            valueSelect.value = selectedValue;
+          }
+          setSeedImportanceUI(idx, !!valueSelect.value);
+        })
+        .catch(err => {
+          console.error(`Error loading values for seed ${idx}`, err);
+          valueSelect.innerHTML = '<option value="">Could not load values</option>';
+          setSeedImportanceUI(idx, false);
+        })
+        .finally(() => {
+          valueSelect.disabled = false;
+        });
+    }
+
+    function loadOptions() {
+      const currentTarget = targetTypeSelect.value;
+      const currentTargetMode = targetModeSelect.value || "individual";
+      const currentVisibleSeedCount = Math.max(1, visibleSeedCount());
+      const currentSeedState = seedRows.map((_, idx) => ({
+        type: seedTypeSelects[idx].value,
+        mode: seedModeSelects[idx].value,
+        value: seedValueSelects[idx].value,
+        importance: seedImportanceSelects[idx].value || "2",
+      }));
+
+      fetch("/api/options")
+        .then(res => res.json())
+        .then(data => {
+          const seedTypes = data.seed_types || [];
+          const targetTypes = data.target_types || [];
+          seedTypeMeta = Object.fromEntries(seedTypes.map(item => [item.key, item]));
+          targetTypeMeta = Object.fromEntries(targetTypes.map(item => [item.key, item]));
+
+          targetTypeSelect.innerHTML = '<option value="">-- select --</option>';
+          targetTypes.forEach(item => {
+            appendSelectOption(targetTypeSelect, item, { useKeyValue: true });
+          });
+
+          if (currentTarget && targetTypes.some(x => x.key === currentTarget && !x.disabled)) {
+            targetTypeSelect.value = currentTarget;
+          }
+          setTargetModeUI(targetTypeMeta[targetTypeSelect.value], currentTargetMode);
+          setVisibleSeedCount(currentVisibleSeedCount);
+
+          seedTypeSelects.forEach((select, idx) => {
+            const prevState = currentSeedState[idx];
+            select.innerHTML = '<option value="">-- select seed type --</option>';
+            seedTypes.forEach(item => {
+              appendSelectOption(select, item, { useKeyValue: true });
+            });
+            if (prevState.type && seedTypes.some(x => x.key === prevState.type && !x.disabled)) {
+              select.value = prevState.type;
+            }
+            updateSeedTypeHelp(idx, select.value);
+            seedImportanceSelects[idx].value = prevState.importance;
+
+            const meta = seedTypeMeta[select.value];
+            const mode = setSeedModeUI(idx, meta, prevState.mode);
+            if (select.value && mode) {
+              loadValuesForSeed(idx, select.value, mode, prevState.value);
+            } else {
+              hideSeedValueUI(idx);
+              setSeedImportanceUI(idx, false);
+            }
+          });
+        })
+        .catch(err => {
+          console.error("Error loading options", err);
+        });
+    }
+
+      seedTypeSelects.forEach((select, idx) => {
+        select.addEventListener("change", () => {
+        updateSeedTypeHelp(idx, select.value);
+        const meta = seedTypeMeta[select.value];
+        const mode = setSeedModeUI(idx, meta, "");
+        if (mode) {
+          loadValuesForSeed(idx, select.value, mode, "");
+        } else {
+          hideSeedValueUI(idx);
+          setSeedImportanceUI(idx, false);
+        }
+      });
+    });
+
+    seedModeSelects.forEach((select, idx) => {
+      select.addEventListener("change", () => {
+        const classKey = seedTypeSelects[idx].value;
+        const meta = seedTypeMeta[classKey];
+        const mode = setSeedModeUI(idx, meta, select.value);
+        if (mode) {
+          loadValuesForSeed(idx, classKey, mode, "");
+        } else {
+          hideSeedValueUI(idx);
+          setSeedImportanceUI(idx, false);
+        }
+      });
+    });
+
+    seedValueSelects.forEach((select, idx) => {
+      select.addEventListener("change", () => {
+        setSeedImportanceUI(idx, !!select.value);
+      });
+    });
+
+    targetTypeSelect.addEventListener("change", () => {
+      const meta = targetTypeMeta[targetTypeSelect.value];
+      setTargetModeUI(meta, meta ? meta.default_target_mode : "individual");
+    });
+
+    addSeedBtn.addEventListener("click", () => {
+      const nextCount = Math.min(seedRows.length, visibleSeedCount() + 1);
+      setVisibleSeedCount(nextCount);
+    });
+
+    seedRemoveBtns.forEach((btn, idx) => {
+      btn.addEventListener("click", () => {
+        removeSeedAt(idx);
+      });
+    });
+
+    [targetTypeSelect, targetModeSelect, ...seedTypeSelects, ...seedModeSelects, ...seedValueSelects, ...seedImportanceSelects]
+      .forEach((selectEl) => {
+        if (!selectEl) return;
+        selectEl.addEventListener("mousedown", () => ensureDropdownRoom(selectEl));
+        selectEl.addEventListener("focus", () => ensureDropdownRoom(selectEl));
+      });
+
+    function applySearchToInputs(search) {
+      targetTypeSelect.value = search.target_type || "";
+      setTargetModeUI(targetTypeMeta[targetTypeSelect.value], search.target_mode || "individual");
+      const seeds = (search.seeds || []).slice(0, 3);
+      setVisibleSeedCount(Math.max(1, seeds.length));
+      seedTypeSelects.forEach((sel, idx) => {
+        resetSeedRow(idx);
+      });
+      seeds.forEach((seed, idx) => {
+        applySeedRowState(idx, {
+          type: seed.type || "",
+          mode: seed.mode || "",
+          value: seed.label || "",
+          importance: String(seed.importance ?? 2),
+        });
+      });
+      updateSeedControlsUI();
+    }
+    setVisibleSeedCount(1);
+    loadOptions();
+
+function renderResults(search) {
+      const tech = search.technology || "";
+      const scen = search.scenario || "";
+      const targetType = search.target_type || "TrainingCentre";
+      const targetMode = search.target_mode || "individual";
+      const targetText = targetShortText(targetType, targetMode);
+      const seeds = search.seeds || [];
+      const seedSummary = seeds.length ? seeds.map(seedShortText).join(" | ") : "";
+      const results = search.results || [];
+      const ratings = search.ratings || (search.ratings = {});
+
+      resultsContainer.innerHTML = "";
+
+      if (!results.length) {
+        resultsSummary.innerHTML = `No results for target <strong>${targetText}</strong>.`;
+        const div = document.createElement("div");
+        div.className = "empty-state";
+        div.textContent = seedSummary
+          ? `No matches returned for seeds: ${seedSummary}.`
+          : "No matches returned from the recommender. Try a different combination.";
+        resultsContainer.appendChild(div);
+        return;
+      }
+
+      resultsSummary.innerHTML = `Showing <strong>${results.length}</strong> results for target <strong>${targetText}</strong>.`;
+
+      results.forEach((center, idx) => {
+        const s = center.scores || {};
+
+        const card = document.createElement("article");
+        card.className = "center-card";
+
+        const header = document.createElement("div");
+        header.className = "center-header";
+
+        const left = document.createElement("div");
+        const nameEl = document.createElement("div");
+        nameEl.className = "center-name";
+        nameEl.textContent = `${idx + 1}. ${center.center_label || "Unnamed result"}`;
+        const metaEl = document.createElement("div");
+        metaEl.className = "center-meta";
+        const metaParts = [];
+        if (center.result_note) {
+          metaParts.push(center.result_note);
+        } else if (center.region) {
+          metaParts.push(`Region: ${center.region}`);
+        }
+        if (seedSummary) {
+          metaParts.push(`Seeds: ${seedSummary}`);
+        }
+        metaParts.push(`Target: ${targetText}`);
+        metaEl.textContent = metaParts.join(" | ");
+        left.appendChild(nameEl);
+        left.appendChild(metaEl);
+
+        const scorePill = document.createElement("div");
+        scorePill.className = "score-pill";
+        const final10 = typeof s.final_score_0_10 === "number"
+          ? formatScore10(s.final_score_0_10)
+          : (typeof s.total_score === "number" ? formatScore10(s.total_score) : "0.0");
+        const core = typeof s.core_score === "number" ? (s.core_score * 10).toFixed(1) : "0.0";
+        scorePill.innerHTML = `<span class="value">${final10} / 10</span>`;
+
+        header.appendChild(left);
+        header.appendChild(scorePill);
+
+        const clusterRow = document.createElement("div");
+        clusterRow.className = "cluster-row";
+        const clusters = Array.isArray(s.seed_fit_clusters) && s.seed_fit_clusters.length
+          ? s.seed_fit_clusters.map(item => [item.label, item.score_0_10, item.tooltip || "", !!item.inactive])
+          : [
+              ["Operational fit", typeof s.operational_fit === "number" ? s.operational_fit * 10 : 0, "", false],
+              ["Training capacity", typeof s.training_capacity === "number" ? s.training_capacity * 10 : 0, "", false],
+              ["Infrastructure & networks", typeof s.infrastructure_coop === "number" ? s.infrastructure_coop * 10 : 0, "", false],
+            ];
+        clusters.forEach(([label, val, tooltip, inactive]) => {
+          const chip = document.createElement("span");
+          chip.className = "cluster-chip";
+          chip.title = tooltip || SCORE_TOOLTIPS[label] || "";
+          const v10 = inactive ? "N/A" : (typeof val === "number" ? val.toFixed(1) : "0.0");
+          chip.textContent = inactive ? `${label}: N/A` : `${label}: ${v10} / 10`;
+          clusterRow.appendChild(chip);
+        });
+
+        const explainBlock = document.createElement("div");
+        explainBlock.className = "explain-block";
+        const exTitle = document.createElement("div");
+        exTitle.className = "explain-title";
+        exTitle.textContent = "Why this result?";
+        const exList = document.createElement("ul");
+        exList.className = "explain-list";
+        const exps = center.explanations_simple || [];
+        if (!exps.length) {
+          const li = document.createElement("li");
+          li.className = "explain-item";
+          li.textContent = "No detailed explanations returned.";
+          exList.appendChild(li);
+        } else {
+          buildExplanationList(exps, exList);
+        }
+        explainBlock.appendChild(exTitle);
+        explainBlock.appendChild(exList);
+
+        const metaPathGroups = center.meta_path_groups || [];
+        let metaPathDetails = null;
+        if (metaPathGroups.length) {
+          metaPathDetails = document.createElement("details");
+          metaPathDetails.className = "just-details";
+          const sum = document.createElement("summary");
+          sum.textContent = "Show meta-path analysis";
+          metaPathDetails.appendChild(sum);
+
+          metaPathGroups.forEach((g) => {
+            const title = document.createElement("div");
+            title.className = "just-group-title";
+            title.textContent = g.title || "";
+            metaPathDetails.appendChild(title);
+
+            const listWrap = document.createElement("div");
+            listWrap.className = "just-group-wrap";
+            metaPathDetails.appendChild(listWrap);
+
+            const all = g.paths || [];
+            const maxShown = 5;
+            const shown = all.slice(0, maxShown);
+            const remaining = all.length - shown.length;
+
+            function appendMetaRow(item, parent) {
+              const row = document.createElement("div");
+              row.className = "graph-path";
+              const exampleText = item.example_text ? ` | example: ${item.example_text}` : "";
+              row.textContent = `${item.signature} | shortest path: ${item.shortest_length} | support: ${item.support_count} (${item.support_ratio}) | PCRW: ${item.raw_pcrw} | normalized PCRW: ${item.normalized_pcrw} | path weight: ${item.path_weight} | contribution: ${item.contribution_0_10}/10${exampleText}`;
+              parent.appendChild(row);
+            }
+
+            shown.forEach((item) => appendMetaRow(item, listWrap));
+
+            if (remaining > 0) {
+              const hiddenWrap = document.createElement("div");
+              hiddenWrap.style.display = "none";
+              listWrap.appendChild(hiddenWrap);
+              all.slice(maxShown).forEach((item) => appendMetaRow(item, hiddenWrap));
+
+              const btn = document.createElement("button");
+              btn.type = "button";
+              btn.className = "just-more-btn";
+              btn.textContent = `Show ${remaining} more`;
+              let expanded = false;
+              btn.addEventListener("click", () => {
+                expanded = !expanded;
+                hiddenWrap.style.display = expanded ? "block" : "none";
+                btn.textContent = expanded ? "Show less" : `Show ${remaining} more`;
+              });
+              listWrap.appendChild(btn);
+            }
+          });
+        }
+
+        const groups = center.graph_groups || [];
+        const legacyPaths = center.graph_paths || [];
+        let justDetails = null;
+        if (groups.length || legacyPaths.length) {
+          justDetails = document.createElement("details");
+          justDetails.className = "just-details";
+          const sum = document.createElement("summary");
+          sum.textContent = "Show justification graph paths";
+          justDetails.appendChild(sum);
+        }
+
+        function renderMetaPath(container, pathSteps) {
+          // pathSteps: [{kind:"node"/"pred", label, dir?}, ...]
+          pathSteps.forEach((st, idx) => {
+            const span = document.createElement("span");
+            if (st.kind === "pred") {
+              span.className = "path-pred";
+              span.textContent = `[${st.label}]`;
+            } else {
+              span.className = "path-step";
+              span.textContent = st.label;
+            }
+            container.appendChild(span);
+
+            if (idx < pathSteps.length - 1) {
+              const next = pathSteps[idx + 1];
+              const arrow = document.createElement("span");
+              let isRev = false;
+              // If the relationship is inverse, show the arrow in reverse direction (same glyph, rotated)
+              if (st.kind === "pred" && st.dir === "reverse") isRev = true;
+              if (next && next.kind === "pred" && next.dir === "reverse") isRev = true;
+              arrow.className = "path-arrow" + (isRev ? " rev" : "");
+              arrow.textContent = isRev ? "<-" : "->";
+              container.appendChild(arrow);
+            }
+          });
+        }
+
+        if (groups.length) {
+          groups.forEach((g) => {
+            const title = document.createElement("div");
+            title.className = "just-group-title";
+            title.textContent = g.title || "";
+            justDetails.appendChild(title);
+
+            const all = g.paths || [];
+            const maxShown = 5;
+            const shown = all.slice(0, maxShown);
+            const remaining = all.length - shown.length;
+
+            const listWrap = document.createElement("div");
+            listWrap.className = "just-group-wrap";
+            justDetails.appendChild(listWrap);
+
+            shown.forEach((pSteps) => {
+              const p = document.createElement("div");
+              p.className = "graph-path";
+              const bullet = document.createElement("span");
+              bullet.textContent = "- ";
+              p.appendChild(bullet);
+              renderMetaPath(p, pSteps);
+              listWrap.appendChild(p);
+            });
+
+            if (remaining > 0) {
+              const btn = document.createElement("button");
+              btn.type = "button";
+              btn.className = "just-more-btn";
+              btn.textContent = `Show ${remaining} more`;
+              let expanded = false;
+
+              const hiddenWrap = document.createElement("div");
+              hiddenWrap.style.display = "none";
+              listWrap.appendChild(hiddenWrap);
+
+              all.slice(maxShown).forEach((pSteps) => {
+                const p = document.createElement("div");
+                p.className = "graph-path";
+                const bullet = document.createElement("span");
+                bullet.textContent = "- ";
+                p.appendChild(bullet);
+                renderMetaPath(p, pSteps);
+                hiddenWrap.appendChild(p);
+              });
+
+              btn.addEventListener("click", () => {
+                expanded = !expanded;
+                hiddenWrap.style.display = expanded ? "block" : "none";
+                btn.textContent = expanded ? "Show less" : `Show ${remaining} more`;
+              });
+
+              listWrap.appendChild(btn);
+            }
+          });
+        } else if (legacyPaths.length) {
+          // Fallback (legacy strings)
+          legacyPaths.forEach((pText) => {
+            const p = document.createElement("div");
+            p.className = "graph-path";
+            p.textContent = pText;
+            justDetails.appendChild(p);
+          });
+        }
+
+        const ratingRow = document.createElement("div");
+        ratingRow.className = "rating-row";
+        const ratingLabel = document.createElement("div");
+        ratingLabel.className = "rating-label";
+        ratingLabel.textContent = "How do you rate this recommendation?";
+
+        const ratingBtns = document.createElement("div");
+        ratingBtns.className = "rating-buttons";
+
+        const btnBad = document.createElement("button");
+        btnBad.type = "button";
+        btnBad.className = "rating-btn bad";
+        btnBad.textContent = "Bad";
+
+        const btnNeutral = document.createElement("button");
+        btnNeutral.type = "button";
+        btnNeutral.className = "rating-btn neutral";
+        btnNeutral.textContent = "Neutral";
+
+        const btnGood = document.createElement("button");
+        btnGood.type = "button";
+        btnGood.className = "rating-btn good";
+        btnGood.textContent = "Good";
+
+        function syncRatingButtons() {
+          const r = ratings[center.center_label];
+          [btnBad, btnNeutral, btnGood].forEach(b => b.classList.remove("active"));
+          if (r === "Bad") btnBad.classList.add("active");
+          else if (r === "Neutral") btnNeutral.classList.add("active");
+          else if (r === "Good") btnGood.classList.add("active");
+        }
+
+        function logFeedback(ratingLabel) {
+          ratings[center.center_label] = ratingLabel;
+          const ts = new Date().toLocaleTimeString();
+          const queryTitle = buildSearchTitle(search);
+          const entry = {
+            center_label: center.center_label,
+            rating: ratingLabel,
+            query_title: queryTitle,
+            ts,
+          };
+          feedbackEntries.unshift(entry);
+          renderFeedbackLog();
+          const payload = {
+            tech,
+            scen,
+            query_title: queryTitle,
+            result_label: center.center_label,
+            rating: ratingLabel,
+            scores: s,
+          };
+          fetch("/api/feedback", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(payload)
+          }).catch(err => console.error("Feedback POST error", err));
+        }
+
+        btnBad.addEventListener("click", () => { logFeedback("Bad"); syncRatingButtons(); });
+        btnNeutral.addEventListener("click", () => { logFeedback("Neutral"); syncRatingButtons(); });
+        btnGood.addEventListener("click", () => { logFeedback("Good"); syncRatingButtons(); });
+
+        syncRatingButtons();
+
+        ratingBtns.appendChild(btnBad);
+        ratingBtns.appendChild(btnNeutral);
+        ratingBtns.appendChild(btnGood);
+        ratingRow.appendChild(ratingLabel);
+        ratingRow.appendChild(ratingBtns);
+
+        card.appendChild(header);
+        card.appendChild(clusterRow);
+        card.appendChild(explainBlock);
+        if (metaPathDetails) {
+          card.appendChild(metaPathDetails);
+        }
+        if (justDetails) {
+          card.appendChild(justDetails);
+        }
+        card.appendChild(ratingRow);
+
+        resultsContainer.appendChild(card);
+      });
+    }
+
+    runBtn.addEventListener("click", () => {
+      const targetType = targetTypeSelect.value;
+      const targetMode = targetModeSelect.value || "individual";
+      const { seeds, hasPartialRow } = collectSeeds();
+
+      if (!targetType) {
+        alert("Please select a target class.");
+        return;
+      }
+      if (hasPartialRow) {
+        alert("A seed row is partially filled. Complete the required seed selections or clear the row.");
+        return;
+      }
+      if (!seeds.length) {
+        alert("Please select at least one seed.");
+        return;
+      }
+
+      resultsSummary.textContent = "Running recommendation...";
+      resultsContainer.innerHTML = "";
+      fetch("/api/recommend", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          seeds,
+          target_type: targetType,
+          target_mode: targetMode,
+        })
+      })
+        .then(res => res.json())
+        .then(data => {
+          if (data.error) {
+            resultsSummary.innerHTML = `<span style="color:#b91c1c;">Error:</span> ${data.error}`;
+            const div = document.createElement("div");
+            div.className = "empty-state";
+            div.textContent = "The backend returned an error. Check the Flask console.";
+            resultsContainer.appendChild(div);
+            return;
+          }
+          const results = data.results || [];
+          const techSeed = seeds.find(s => s.type === "Technology" && s.mode === "individual");
+          const scenSeed = seeds.find(s => s.type === "Scenario" && s.mode === "individual");
+          const search = {
+            seeds,
+            target_type: targetType,
+            target_mode: targetMode,
+            technology: techSeed ? techSeed.label : "",
+            scenario: scenSeed ? scenSeed.label : "",
+            results,
+            ratings: {},
+            ts: new Date().toLocaleTimeString(),
+          };
+          previousSearches.unshift(search);
+          currentSearch = search;
+          renderPreviousSearches();
+          renderResults(search);
+        })
+        .catch(err => {
+          console.error("Fetch error", err);
+          resultsSummary.innerHTML = `<span style="color:#b91c1c;">Error contacting backend.</span>`;
+          const div = document.createElement("div");
+          div.className = "empty-state";
+          div.textContent = "Could not reach the backend. Make sure Flask is running.";
+          resultsContainer.appendChild(div);
+        });
+    });
+  
+    });
+</script>
+</body>
+</html>
+
+
+
+
+
