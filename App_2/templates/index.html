@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -72,6 +72,11 @@
 
     details.just-details { margin-top: 2px; font-size: 11px; }
     .graph-path { border-radius: 3px; border: 1px solid #e5e7eb; padding: 2px 4px; margin-top: 2px; background: #ffffff; }
+    .graph-path.meta-matched { border-color: #bfdbfe; background: #eff6ff; }
+    .graph-path.meta-not-matched { color: #6b7280; background: #f9fafb; }
+    .graph-path.meta-unsupported { color: #92400e; background: #fffbeb; border-style: dashed; }
+    .graph-path.meta-global-missing { color: #9ca3af; background: #f3f4f6; border-style: dashed; }
+    .just-section-title { margin-top: 6px; font-size: 11px; font-weight: 700; color: #4b5563; text-transform: uppercase; letter-spacing: 0.03em; }
     .path-step { display: inline-block; padding: 2px 6px; background: #e0e7ff; border-radius: 4px; color: #3730a3; font-weight: 500; }
     
 
@@ -122,9 +127,9 @@
                 <div class="seed-row-title">Seed 1</div>
                 <button type="button" class="seed-remove-btn" data-remove-seed="0" style="display:none;">Remove</button>
               </div>
-              <label class="field-label" for="seedType0">Seed type</label>
+              <label class="field-label" for="seedType0">Seed class</label>
               <select id="seedType0" class="seed-type-select">
-                <option value="">-- select seed type --</option>
+                <option value="">-- select seed class --</option>
               </select>
               <div class="seed-type-help"></div>
               <div class="seed-mode-wrap" style="display:none;">
@@ -157,9 +162,9 @@
                 <div class="seed-row-title">Seed 2</div>
                 <button type="button" class="seed-remove-btn" data-remove-seed="1">Remove</button>
               </div>
-              <label class="field-label" for="seedType1">Seed type</label>
+              <label class="field-label" for="seedType1">Seed class</label>
               <select id="seedType1" class="seed-type-select">
-                <option value="">-- select seed type --</option>
+                <option value="">-- select seed class --</option>
               </select>
               <div class="seed-type-help"></div>
               <div class="seed-mode-wrap" style="display:none;">
@@ -192,9 +197,9 @@
                 <div class="seed-row-title">Seed 3</div>
                 <button type="button" class="seed-remove-btn" data-remove-seed="2">Remove</button>
               </div>
-              <label class="field-label" for="seedType2">Seed type</label>
+              <label class="field-label" for="seedType2">Seed class</label>
               <select id="seedType2" class="seed-type-select">
-                <option value="">-- select seed type --</option>
+                <option value="">-- select seed class --</option>
               </select>
               <div class="seed-type-help"></div>
               <div class="seed-mode-wrap" style="display:none;">
@@ -226,9 +231,9 @@
                 <div class="seed-row-title">Seed 4</div>
                 <button type="button" class="seed-remove-btn" data-remove-seed="3">Remove</button>
               </div>
-              <label class="field-label" for="seedType3">Seed type</label>
+              <label class="field-label" for="seedType3">Seed class</label>
               <select id="seedType3" class="seed-type-select">
-                <option value="">-- select seed type --</option>
+                <option value="">-- select seed class --</option>
               </select>
               <div class="seed-type-help"></div>
               <div class="seed-mode-wrap" style="display:none;">
@@ -261,9 +266,9 @@
                 <div class="seed-row-title">Seed 5</div>
                 <button type="button" class="seed-remove-btn" data-remove-seed="4">Remove</button>
               </div>
-              <label class="field-label" for="seedType4">Seed type</label>
+              <label class="field-label" for="seedType4">Seed class</label>
               <select id="seedType4" class="seed-type-select">
-                <option value="">-- select seed type --</option>
+                <option value="">-- select seed class --</option>
               </select>
               <div class="seed-type-help"></div>
               <div class="seed-mode-wrap" style="display:none;">
@@ -321,6 +326,13 @@
   </div>
 
   <script>
+    // Dynamic values inserted into HTML must remain text, including stored feedback.
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, ch => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      })[ch]);
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
       const _rb = document.getElementById('runBtn');
       if (!_rb) { console.error('runBtn not found in DOM'); return; }
@@ -538,7 +550,7 @@
         title.textContent = `${idx + 1}. ${buildSearchTitle(s)}`;
         const meta = document.createElement("div");
         meta.className = "previous-meta";
-        meta.textContent = `${s.results.length} results β€Ά ${s.ts}`;
+        meta.textContent = `${s.results.length} results · ${s.ts}`;
         li.appendChild(title);
         li.appendChild(meta);
         li.addEventListener("click", () => {
@@ -565,10 +577,10 @@
         li.className = "feedback-item";
         const line = document.createElement("div");
         line.className = "feedback-line";
-        line.innerHTML = `<strong>${f.rating}</strong> β€“ ${f.center_label}`;
+        line.innerHTML = `<strong>${escapeHtml(f.rating)}</strong> – ${escapeHtml(f.center_label)}`;
         const meta = document.createElement("div");
         meta.className = "feedback-meta";
-        meta.textContent = `${f.query_title || "Query"} β€Ά ${f.ts}`;
+        meta.textContent = `${f.query_title || "Query"} · ${f.ts}`;
         li.appendChild(line);
         li.appendChild(meta);
         feedbackList.appendChild(li);
@@ -860,7 +872,7 @@
       return fetchClassValues(classKey, mode)
         .then(values => {
           const placeholder = mode === "type" ? "-- select subtype --" : "-- select value --";
-          valueSelect.innerHTML = `<option value="">${placeholder}</option>`;
+          valueSelect.innerHTML = `<option value="">${escapeHtml(placeholder)}</option>`;
           values.forEach(item => {
             appendSelectOption(valueSelect, item);
           });
@@ -911,7 +923,7 @@
 
           seedTypeSelects.forEach((select, idx) => {
             const prevState = currentSeedState[idx];
-            select.innerHTML = '<option value="">-- select seed type --</option>';
+            select.innerHTML = '<option value="">-- select seed class --</option>';
             seedTypes.forEach(item => {
               appendSelectOption(select, item, { useKeyValue: true });
             });
@@ -1028,7 +1040,7 @@ function renderResults(search) {
       resultsContainer.innerHTML = "";
 
       if (!results.length) {
-        resultsSummary.innerHTML = `No results for target <strong>${targetText}</strong>.`;
+        resultsSummary.innerHTML = `No results for target <strong>${escapeHtml(targetText)}</strong>.`;
         const div = document.createElement("div");
         div.className = "empty-state";
         div.textContent = seedSummary
@@ -1038,7 +1050,13 @@ function renderResults(search) {
         return;
       }
 
-      resultsSummary.innerHTML = `Showing <strong>${results.length}</strong> results for target <strong>${targetText}</strong>.`;
+      const activeSeedCount = Array.isArray(results[0]?.scores?.seed_fit_clusters)
+        ? results[0].scores.seed_fit_clusters.filter(item => !item.inactive).length
+        : seeds.length;
+      resultsSummary.innerHTML = `Showing <strong>${escapeHtml(results.length)}</strong> results for target <strong>${escapeHtml(targetText)}</strong>.`;
+      if (activeSeedCount === 1) {
+        resultsSummary.innerHTML += ` <span class="small-text">Importance does not affect the result when only one active seed is selected.</span>`;
+      }
 
       results.forEach((center, idx) => {
         const s = center.scores || {};
@@ -1061,13 +1079,11 @@ function renderResults(search) {
         } else if (center.region) {
           metaParts.push(`Region: ${center.region}`);
         }
-        if (seedSummary) {
-          metaParts.push(`Seeds: ${seedSummary}`);
-        }
-        metaParts.push(`Target: ${targetText}`);
         metaEl.textContent = metaParts.join(" | ");
         left.appendChild(nameEl);
-        left.appendChild(metaEl);
+        if (metaParts.length) {
+          left.appendChild(metaEl);
+        }
 
         const scorePill = document.createElement("div");
         scorePill.className = "score-pill";
@@ -1075,7 +1091,7 @@ function renderResults(search) {
           ? formatScore10(s.final_score_0_10)
           : (typeof s.total_score === "number" ? formatScore10(s.total_score) : "0.0");
         const core = typeof s.core_score === "number" ? (s.core_score * 10).toFixed(1) : "0.0";
-        scorePill.innerHTML = `<span class="value">${final10} / 10</span>`;
+        scorePill.innerHTML = `<span class="value">${escapeHtml(final10)} / 10</span>`;
 
         header.appendChild(left);
         header.appendChild(scorePill);
@@ -1118,25 +1134,52 @@ function renderResults(search) {
             metaPathDetails.appendChild(listWrap);
 
             const all = g.paths || [];
-            const maxShown = 5;
-            const shown = all.slice(0, maxShown);
-            const remaining = all.length - shown.length;
+            const matched = all.filter((item) => item.status === "matched");
+            const missing = all.filter((item) => item.status !== "matched");
+
+            function statusLabel(status) {
+              if (status === "matched") return "matched";
+              if (status === "unsupported for query") return "unsupported for query";
+              if (status === "globally missing") return "globally missing";
+              return "not matched here";
+            }
+
+            function statusClass(status) {
+              if (status === "matched") return "meta-matched";
+              if (status === "unsupported for query") return "meta-unsupported";
+              if (status === "globally missing") return "meta-global-missing";
+              return "meta-not-matched";
+            }
 
             function appendMetaRow(item, parent) {
               const row = document.createElement("div");
-              row.className = "graph-path";
+              row.className = `graph-path ${statusClass(item.status)}`;
               const pathCount = typeof item.path_count === "number" ? item.path_count : 0;
-              row.textContent = `${item.signature} | path count: ${pathCount} | contribution: ${item.contribution_0_10}/10`;
+              if (item.status === "matched") {
+                row.textContent = `${item.signature} | matched | path count: ${pathCount} | contribution: ${item.contribution_0_10}/10`;
+              } else {
+                row.textContent = `${item.signature} | ${statusLabel(item.status)}`;
+              }
               parent.appendChild(row);
             }
 
-            shown.forEach((item) => appendMetaRow(item, listWrap));
+            function appendMetaSection(items, sectionTitle) {
+              if (!items.length) return;
+              const titleEl = document.createElement("div");
+              titleEl.className = "just-section-title";
+              titleEl.textContent = sectionTitle;
+              listWrap.appendChild(titleEl);
 
-            if (remaining > 0) {
+              const maxShown = 5;
+              const shown = items.slice(0, maxShown);
+              const remaining = items.length - shown.length;
+              shown.forEach((item) => appendMetaRow(item, listWrap));
+              if (remaining <= 0) return;
+
               const hiddenWrap = document.createElement("div");
               hiddenWrap.style.display = "none";
               listWrap.appendChild(hiddenWrap);
-              all.slice(maxShown).forEach((item) => appendMetaRow(item, hiddenWrap));
+              items.slice(maxShown).forEach((item) => appendMetaRow(item, hiddenWrap));
 
               const btn = document.createElement("button");
               btn.type = "button";
@@ -1150,6 +1193,9 @@ function renderResults(search) {
               });
               listWrap.appendChild(btn);
             }
+
+            appendMetaSection(matched, "Matched criteria");
+            appendMetaSection(missing, "Missing / unsupported criteria");
           });
         }
 
@@ -1165,10 +1211,15 @@ function renderResults(search) {
         }
 
         function pathStepsToText(pathSteps) {
-          return (pathSteps || []).map((st) => {
-            if (st.kind === "pred") return `[${st.label}]`;
-            return st.label;
-          }).join(" -> ");
+          if (!Array.isArray(pathSteps) || !pathSteps.length) return "";
+          const parts = [pathSteps[0].label];
+          for (let idx = 1; idx < pathSteps.length; idx += 2) {
+            const pred = pathSteps[idx];
+            const node = pathSteps[idx + 1];
+            if (!pred || !node) break;
+            parts.push(idx === 1 ? `${pred.label} ${node.label}` : `, which ${pred.label} ${node.label}`);
+          }
+          return parts.join(" ");
         }
 
         if (groups.length) {
@@ -1348,7 +1399,7 @@ function renderResults(search) {
         .then(res => res.json())
         .then(data => {
           if (data.error) {
-            resultsSummary.innerHTML = `<span style="color:#b91c1c;">Error:</span> ${data.error}`;
+            resultsSummary.innerHTML = `<span style="color:#b91c1c;">Error:</span> ${escapeHtml(data.error)}`;
             const div = document.createElement("div");
             div.className = "empty-state";
             div.textContent = "The backend returned an error. Check the Flask console.";

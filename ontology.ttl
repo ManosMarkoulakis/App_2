@@ -5175,10 +5175,7 @@ Bio and toxin decontamlination
                                     :Res_Tech_Dec_GaseousDisinfectants ,
                                     :Res_Tech_Dec_LiquidDisinfectants ,
                                     :Res_Tech_Dec_SolidDisinfectants ;
-                    :hasAdress "UCLouvain-CTMA, Avenue Hippocrate 54, 1200 Brussels, Belgium" ;
-                    :hasEmail "jean-luc.gala@uclouvain.be, jean-francois.durant@uclouvain.be, benjamin.smits@uclouvain.be" ;
                     :hasOwnership "Public-Private" ;
-                    :hasPoC "Jean-Luc Gala, director" ;
                     :hasSectorAppointed "Healthcare, Civil Protection" ;
                     :hasSite "https://www.uclouvain.be/fr/plateformes-technologiques/ctma" ;
                     :hasYearOfEstablishment "2009" ;
@@ -6319,11 +6316,7 @@ The same applies to SOPs."""@en ;
                                    :VictimsTreatmentProtocolsTrainingCapability ;
            :usesSOP :SOP_General ;
            :usesTechnology :Res_Tech_General_EndUsers ;
-           :hasAdress "Oostmalsesteenweg 75, 2520 Ranst" ;
            :hasDistrict "Antwerp" ;
-           :hasEmail "euprojects@campusvesta.be" ;
-           :hasIdentificationNumber "822442511" ;
-           :hasPoC "Thomas Van Den Bosch/ Advisor European Projects" ;
            :hasRegion "Flanders" ;
            :hasSectorAppointed "Province of Antwerp" ;
            :hasSite "https://www.campusvesta.be/en.html" ;
@@ -6442,9 +6435,7 @@ Hybrid training capabilities (in-person and virtual via VTC).""" ;
                                        :TC3_TRCO_4 ,
                                        :TC3_TRCO_5 ,
                                        :TC3_TRCO_6 ;
-               :hasAdress "Vita Nejedlého, 68201 Vyškov, Czechia" ;
                :hasDistrict "Vyškov" ;
-               :hasEmail "postbox@jcbrncoe.org" ;
                :hasOwnership "NATO" ;
                :hasRegion "Moravia" ;
                :hasSectorAppointed "MOD" ;
@@ -6982,10 +6973,7 @@ Hybrid training capabilities (in-person and virtual via VTC).""" ;
                           :Res_Tech_DIM_NucleidAssays ,
                           :Res_Tech_Dec_ChemicalProducts ,
                           :Res_Tech_Dec_PhysicalMethods ;
-          :hasAdress "Rome Italy, Largo Francesci Vito 1, 00168" ;
           :hasDistrict "Rome Italy," ;
-          :hasEmail "paolomaurizio.soave@policlinicogemelli.it" ;
-          :hasPoC "Prof. Maurizio Soave:Director of the Anti-poison Center, Policlinico Gemelli, Rome Italy" ;
           :hasRegion "Lazio" ;
           :hasSectorAppointed "Ministry of Health" ;
           :hasYearOfEstablishment "1964" ;
@@ -7489,11 +7477,8 @@ Hybrid training capabilities (in-person and virtual via VTC).""" ;
          :usesSOP :SOP_Undisclosed ;
          :usesTechnology :Res_Tech_DIM_Undisclosed ,
                          :Res_Tech_Dec_Limited ;
-         :hasAdress "Leamington Road, Ryton on Dunsmore, Coventry" ;
          :hasDistrict "Coventry" ;
-         :hasEmail "cbrnadmin@westmidlands.police.uk" ;
          :hasOwnership "HM Government" ;
-         :hasPoC "Mr. Nigel Tottie, Policy and Project Manager" ;
          :hasRegion "West Midlands" ;
          :hasSectorAppointed "Ministry of Interior (UK Home Office)" ;
          :hasYearOfEstablishment "2002" ;

@@ -1,15 +1,27 @@
-﻿from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template
 import json
+import math
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from enovation_recommender import build_flexible_ui_payload, build_ui_payload, run_sparql
+if __package__:
+    from .enovation_recommender import (
+        KnowledgeBaseUnavailableError, build_flexible_ui_payload,
+        build_ui_payload, run_sparql,
+    )
+else:
+    from enovation_recommender import (
+        KnowledgeBaseUnavailableError, build_flexible_ui_payload,
+        build_ui_payload, run_sparql,
+    )
 
 # Flask app + feedback log location.
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
 ROOT_DIR = Path(__file__).resolve().parents[1]
-FEEDBACK_FILE = ROOT_DIR / "feedback_log.jsonl"
+FEEDBACK_FILE = Path(os.getenv("FEEDBACK_FILE", str(ROOT_DIR / "feedback_log.jsonl")))
 EN_NS = "http://www.semanticweb.org/eNOVATION-ontology#"
 
 INSTANCE_CACHE: Dict[str, List[Dict[str, str]]] = {}
@@ -90,6 +102,13 @@ def _humanize_local_name(name: str) -> str:
     return "".join(out).strip()
 
 
+def _require_sparql_bindings(data: Dict[str, object], query_name: str) -> List[Dict[str, object]]:
+    bindings = data.get("results", {}).get("bindings") if isinstance(data, dict) else None
+    if bindings is None:
+        raise KnowledgeBaseUnavailableError(f"Fuseki query failed or returned malformed data for {query_name}.")
+    return list(bindings)
+
+
 def _fetch_class_catalog() -> Dict[str, object]:
     """Greedy class catalog: all EN classes (with labels + instance counts)."""
     global CLASS_CATALOG_CACHE
@@ -139,9 +158,11 @@ def _fetch_class_catalog() -> Dict[str, object]:
 
     class_data = run_sparql(q_classes)
     count_data = run_sparql(q_counts)
+    class_bindings = _require_sparql_bindings(class_data, "class catalog")
+    count_bindings = _require_sparql_bindings(count_data, "class instance counts")
 
     counts: Dict[str, int] = {}
-    for b in count_data.get("results", {}).get("bindings", []):
+    for b in count_bindings:
         uri = b["class"]["value"]
         try:
             counts[uri] = int(b["count"]["value"])
@@ -149,7 +170,7 @@ def _fetch_class_catalog() -> Dict[str, object]:
             counts[uri] = 0
 
     by_uri: Dict[str, Dict[str, object]] = {}
-    for b in class_data.get("results", {}).get("bindings", []):
+    for b in class_bindings:
         uri = b["class"]["value"]
         label = b.get("label", {}).get("value")
         definition = b.get("definition", {}).get("value")
@@ -211,7 +232,7 @@ def _fetch_instances_for_class(class_uri: str) -> List[Dict[str, str]]:
     ORDER BY LCASE(STR(?label))
     """
     data = run_sparql(query)
-    bindings = data.get("results", {}).get("bindings", [])
+    bindings = _require_sparql_bindings(data, f"instances for {class_uri}")
     items = []
     for b in bindings:
         uri = b["s"]["value"]
@@ -258,7 +279,7 @@ def _fetch_subclasses_for_class(class_uri: str) -> List[Dict[str, str]]:
     ORDER BY LCASE(STR(?label)) LCASE(STR(?sub))
     """
     data = run_sparql(query)
-    bindings = data.get("results", {}).get("bindings", [])
+    bindings = _require_sparql_bindings(data, f"subclasses for {class_uri}")
     catalog = _fetch_class_catalog()
     by_uri = {item["class_uri"]: item for item in catalog["items"]}
     items = []
@@ -369,6 +390,29 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/healthz")
+def health():
+    """Process liveness; /api/options additionally checks the knowledge base."""
+    return jsonify({"status": "ok"})
+
+
+@app.before_request
+def validate_json_object():
+    """Reject malformed API input before it reaches application code."""
+    if request.method == "POST":
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"error": "Expected a JSON object"}), 400
+
+
+@app.after_request
+def response_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    return response
+
+
 @app.route("/api/options", methods=["GET"])
 def api_options():
     """Fetch dynamic options.
@@ -401,6 +445,12 @@ def api_options():
         # Keep old UI contract while we migrate frontend.
         tech_labels = [x["label"] for x in _fetch_instances_for_class(f"{EN_NS}Technology") if not x.get("disabled")]
         scen_labels = [x["label"] for x in _fetch_instances_for_class(f"{EN_NS}Scenario") if not x.get("disabled")]
+    except KnowledgeBaseUnavailableError as e:
+        print(f"Error fetching dynamic options: {e}")
+        seed_types = []
+        target_types = []
+        tech_labels = []
+        scen_labels = []
     except Exception as e:
         print(f"Error fetching dynamic options: {e}")
         seed_types = []
@@ -427,14 +477,20 @@ def api_instances():
     class_key = _resolve_catalog_key(class_key)
 
     class_uri = request.args.get("class_uri")
+    # The URI is interpolated into SPARQL: accept catalog entries only.
+    catalog = _fetch_class_catalog()
+    if class_uri and class_uri not in catalog["key_to_uri"].values():
+        return jsonify({"error": "Unknown class URI"}), 400
     if not class_uri:
-        catalog = _fetch_class_catalog()
         class_uri = catalog["key_to_uri"].get(class_key)
     if not class_uri:
         return jsonify({"error": f"Unknown class key/uri: {class_key}"}), 400
 
     try:
         instances = _fetch_instances_for_class(class_uri)
+    except KnowledgeBaseUnavailableError as e:
+        print(f"Knowledge base unavailable while fetching instances for {class_key}: {e}")
+        return jsonify({"error": "Knowledge base unavailable. Please check Fuseki and retry."}), 503
     except Exception as e:
         print(f"Error fetching instances for {class_key}: {e}")
         return jsonify({"error": "Could not fetch instances"}), 500
@@ -463,6 +519,9 @@ def api_class_values():
             values = _fetch_subclasses_for_class(class_uri)
         else:
             values = _fetch_instances_for_class(class_uri)
+    except KnowledgeBaseUnavailableError as e:
+        print(f"Knowledge base unavailable while fetching class values for {class_key}/{mode}: {e}")
+        return jsonify({"error": "Knowledge base unavailable. Please check Fuseki and retry."}), 503
     except Exception as e:
         print(f"Error fetching class values for {class_key}/{mode}: {e}")
         return jsonify({"error": "Could not fetch class values"}), 500
@@ -483,6 +542,10 @@ def api_recommend():
 
         data = request.get_json(force=True) or {}
         seeds = data.get("seeds", [])
+        if not isinstance(seeds, list) or not all(isinstance(seed, dict) for seed in seeds):
+            return jsonify({"error": "Seeds must be a list of objects"}), 400
+        if not isinstance(data.get("target_type"), str):
+            return jsonify({"error": "Invalid target_type"}), 400
         target_type = _resolve_catalog_key(data.get("target_type"))
         target_mode = "individual"
         if not seeds or not target_type:
@@ -495,6 +558,16 @@ def api_recommend():
 
         prepared_seeds = []
         for seed in seeds[:5]:
+            if not isinstance(seed.get("type"), str) or not isinstance(seed.get("mode"), str):
+                return jsonify({"error": "Invalid seed payload"}), 400
+            try:
+                importance = float(seed.get("importance", 2.0))
+            except (TypeError, ValueError):
+                return jsonify({"error": "Invalid seed importance"}), 400
+            if not math.isfinite(importance) or importance < 0:
+                return jsonify({"error": "Invalid seed importance"}), 400
+            if not isinstance(seed.get("value_uri", ""), str):
+                return jsonify({"error": "Invalid seed value URI"}), 400
             seed_type = _resolve_catalog_key(seed.get("type"))
             seed_mode = seed.get("mode")
             seed_type_uri = catalog["key_to_uri"].get(seed_type)
@@ -527,6 +600,9 @@ def api_recommend():
             }
         )
         return jsonify({"results": results})
+    except KnowledgeBaseUnavailableError as e:
+        print("[/api/recommend] KNOWLEDGE BASE ERROR:", e)
+        return jsonify({"error": "Knowledge base unavailable. Please check Fuseki and retry."}), 503
     except Exception as e:
         print("[/api/recommend] ERROR:", e)
         return jsonify({"error": "Internal error in recommender"}), 500
@@ -571,4 +647,8 @@ def api_feedback():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # Supports existing Render services that start this file directly.
+    from waitress import serve
+
+    serve(app, host="0.0.0.0" if os.getenv("RENDER") else "127.0.0.1",
+          port=int(os.getenv("PORT", "5000")), threads=1)

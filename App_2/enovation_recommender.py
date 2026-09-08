@@ -14,15 +14,19 @@ logger = logging.getLogger(__name__)
 
 EN_NS = "http://www.semanticweb.org/eNOVATION-ontology#"
 EN = Namespace(EN_NS)
-FUSEKI_ENDPOINT = os.getenv("FUSEKI_ENDPOINT", "http://147.102.6.178:3030/enovation/sparql")
+FUSEKI_ENDPOINT = os.getenv("FUSEKI_ENDPOINT", "http://localhost:3030/enovation/sparql")
 MAX_PATH_LENGTH = 4
 LENGTH_DECAY_ALPHA = 0.4
 INCLUDE_GLOBALLY_MISSING_IN_SCORE = False
 SHOW_GLOBALLY_MISSING_IN_ANALYSIS = False
 ALLOW_SAME_CLASS_REENTRY = False
 ALLOW_SIBLING_CLASS_REENTRY = False
+ALLOW_LOCAL_TBOX_FALLBACK = os.getenv("APP2_ALLOW_LOCAL_TBOX_FALLBACK", "1") == "1"
 CLASS_URI_ALIASES = {
     f"{EN_NS}ResponceAction": f"{EN_NS}ResponseAction",
+}
+DISPLAY_LABEL_ALIASES = {
+    "UCSC Catholic University of the Sacred Heart for the Fondazione Policlinico Gemelli": "UCSC Catholic University",
 }
 SEMANTIC_FAMILY_ORDER = [
     f"{EN_NS}TrainingCentre",
@@ -54,9 +58,11 @@ _TBOX_CACHE: Optional[Dict[str, Any]] = None
 _CRITERION_CACHE: Dict[Tuple[str, str, int], List[Dict[str, Any]]] = {}
 _CRITERION_MATCH_CACHE: Dict[Tuple[str, Tuple[Any, ...]], Dict[str, List[Dict[str, Any]]]] = {}
 _CRITERION_GLOBAL_SUPPORT_CACHE: Dict[Tuple[Tuple[Any, ...], str], bool] = {}
-_PATH_DISCOVERY_CACHE: Dict[Tuple[str, str, int], Dict[str, List[Dict[str, Any]]]] = {}
-_PCRW_CACHE: Dict[Tuple[str, Tuple[Any, ...]], Dict[str, float]] = {}
 _URI_CACHE: Dict[str, Optional[str]] = {}
+
+
+class KnowledgeBaseUnavailableError(RuntimeError):
+    """Raised when Fuseki data cannot be read reliably for the current request."""
 
 
 def run_sparql(query: str) -> Dict[str, Any]:
@@ -67,7 +73,7 @@ def run_sparql(query: str) -> Dict[str, Any]:
         resp.raise_for_status()
         return resp.json()
     except requests.exceptions.RequestException as exc:
-        logger.warning("run_sparql failed: %s", exc)
+        logger.warning("SPARQL request failed (%s).", type(exc).__name__)
         return {}
 
 
@@ -78,6 +84,20 @@ def sparql_escape_literal(value: str) -> str:
 def _get_val(binding: Dict[str, Any], name: str, default: Optional[str] = None) -> Optional[str]:
     value = binding.get(name)
     return value.get("value", default) if value else default
+
+
+def _require_sparql_bindings(
+    payload: Dict[str, Any],
+    query_name: str,
+    *,
+    non_empty: bool = False,
+) -> List[Dict[str, Any]]:
+    bindings = payload.get("results", {}).get("bindings")
+    if bindings is None:
+        raise KnowledgeBaseUnavailableError(f"Fuseki query failed or returned malformed data for {query_name}.")
+    if non_empty and not bindings:
+        raise KnowledgeBaseUnavailableError(f"Fuseki query returned no bindings for required dataset slice: {query_name}.")
+    return bindings
 
 
 def _local_name(uri: str) -> str:
@@ -102,7 +122,12 @@ def _humanize_local_name(name: str) -> str:
 
 
 def _label_or_name(uri: str, explicit_label: Optional[str]) -> str:
-    return explicit_label or _humanize_local_name(_local_name(uri))
+    label = explicit_label or _humanize_local_name(_local_name(uri))
+    return DISPLAY_LABEL_ALIASES.get(label, label)
+
+
+def _normalize_label_lookup(label: str) -> str:
+    return " ".join(label.split())
 
 
 def get_uri_for_label(label: str) -> Optional[str]:
@@ -111,7 +136,8 @@ def get_uri_for_label(label: str) -> Optional[str]:
     if label in _URI_CACHE:
         return _URI_CACHE[label]
 
-    escaped = sparql_escape_literal(label)
+    normalized_label = _normalize_label_lookup(label)
+    escaped = sparql_escape_literal(normalized_label)
     query = f"""
     PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
     SELECT DISTINCT ?s WHERE {{
@@ -120,13 +146,39 @@ def get_uri_for_label(label: str) -> Optional[str]:
     }} LIMIT 1
     """
     data = run_sparql(query)
-    bindings = data.get("results", {}).get("bindings", [])
+    bindings = data.get("results", {}).get("bindings")
     if bindings:
         uri = bindings[0]["s"]["value"]
         _URI_CACHE[label] = uri
         return uri
 
-    _URI_CACHE[label] = None
+    prefix = normalized_label.split("(", 1)[0].strip()
+    if len(prefix) >= 5:
+        escaped_prefix = sparql_escape_literal(prefix)
+        query_prefix = f"""
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        SELECT DISTINCT ?s WHERE {{
+          ?s rdfs:label ?l .
+          FILTER(CONTAINS(LCASE(STR(?l)), LCASE("{escaped_prefix}")))
+        }} LIMIT 1
+        """
+        data_prefix = run_sparql(query_prefix)
+        bindings_prefix = data_prefix.get("results", {}).get("bindings")
+        if bindings_prefix:
+            uri = bindings_prefix[0]["s"]["value"]
+            _URI_CACHE[label] = uri
+            return uri
+
+        if bindings is None and bindings_prefix is None:
+            raise KnowledgeBaseUnavailableError(
+                f"Fuseki query failed or returned malformed data for label lookup: {label}."
+            )
+
+    if bindings is None:
+        raise KnowledgeBaseUnavailableError(
+            f"Fuseki query failed or returned malformed data for label lookup: {label}."
+        )
+
     return None
 
 
@@ -155,6 +207,7 @@ def _fetch_graph_cache() -> Dict[str, Any]:
     """
 
     q_properties = f"""
+    PREFIX rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
     PREFIX rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
     PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
     PREFIX owl:  <http://www.w3.org/2002/07/owl#>
@@ -213,9 +266,15 @@ def _fetch_graph_cache() -> Dict[str, Any]:
     individual_data = run_sparql(q_individuals)
     triple_data = run_sparql(q_triples)
 
+    class_bindings = _require_sparql_bindings(class_data, "graph classes", non_empty=True)
+    prop_bindings = _require_sparql_bindings(prop_data, "graph properties", non_empty=True)
+    inverse_bindings = _require_sparql_bindings(inverse_data, "graph inverse properties")
+    individual_bindings = _require_sparql_bindings(individual_data, "graph individuals", non_empty=True)
+    triple_bindings = _require_sparql_bindings(triple_data, "graph triples", non_empty=True)
+
     class_labels: Dict[str, str] = {}
     direct_parents: Dict[str, Set[str]] = defaultdict(set)
-    for binding in class_data.get("results", {}).get("bindings", []):
+    for binding in class_bindings:
         class_uri = _canonical_class_uri(binding["class"]["value"])
         class_labels.setdefault(class_uri, _label_or_name(class_uri, _get_val(binding, "label")))
         parent_uri = _get_val(binding, "parent")
@@ -245,14 +304,14 @@ def _fetch_graph_cache() -> Dict[str, Any]:
     class_depth_map = {class_uri: max(0, len(ancestors) - 1) for class_uri, ancestors in ancestors_map.items()}
 
     inverse_map: Dict[str, str] = {}
-    for binding in inverse_data.get("results", {}).get("bindings", []):
+    for binding in inverse_bindings:
         prop_uri = binding["p"]["value"]
         inv_uri = binding["inv"]["value"]
         inverse_map[prop_uri] = inv_uri
         inverse_map[inv_uri] = prop_uri
 
     properties: Dict[str, Dict[str, Any]] = {}
-    for binding in prop_data.get("results", {}).get("bindings", []):
+    for binding in prop_bindings:
         prop_uri = binding["p"]["value"]
         prop = properties.setdefault(
             prop_uri,
@@ -264,7 +323,7 @@ def _fetch_graph_cache() -> Dict[str, Any]:
         )
 
     individuals: Dict[str, Dict[str, Any]] = {}
-    for binding in individual_data.get("results", {}).get("bindings", []):
+    for binding in individual_bindings:
         ind_uri = binding["s"]["value"]
         ind = individuals.setdefault(
             ind_uri,
@@ -293,14 +352,20 @@ def _fetch_graph_cache() -> Dict[str, Any]:
         if not direct_types:
             continue
         for class_uri in ind["all_types"]:
-            observed_direct_types_by_type[class_uri].update(direct_types)
+            compatible_direct_types = {
+                direct_type
+                for direct_type in direct_types
+                if class_uri in ancestors_map.get(direct_type, {direct_type})
+            }
+            if compatible_direct_types:
+                observed_direct_types_by_type[class_uri].update(compatible_direct_types)
 
     individual_uris = set(individuals)
     forward_adj: Dict[str, Dict[str, Set[str]]] = defaultdict(lambda: defaultdict(set))
     reverse_adj: Dict[str, Dict[str, Set[str]]] = defaultdict(lambda: defaultdict(set))
     connected_individuals: Set[str] = set()
 
-    for binding in triple_data.get("results", {}).get("bindings", []):
+    for binding in triple_bindings:
         subj = binding["s"]["value"]
         prop = binding["p"]["value"]
         obj = binding["o"]["value"]
@@ -370,7 +435,8 @@ def _class_label(class_uri: str, graph: Dict[str, Any]) -> str:
 
 
 def _node_label(node_uri: str, graph: Dict[str, Any]) -> str:
-    return graph["individuals"].get(node_uri, {}).get("label", _humanize_local_name(_local_name(node_uri)))
+    label = graph["individuals"].get(node_uri, {}).get("label", _humanize_local_name(_local_name(node_uri)))
+    return DISPLAY_LABEL_ALIASES.get(label, label)
 
 
 def _is_subclass_of(class_uri: str, ancestor_uri: str, graph: Dict[str, Any]) -> bool:
@@ -395,6 +461,26 @@ def _pick_most_specific_class(node_uri: str, selected_class_uri: str, graph: Dic
     if not direct_types:
         return selected_class_uri
     return max(direct_types, key=lambda class_uri: graph["class_depth"].get(class_uri, 0))
+
+
+def _seed_start_classes_for_individual(node_uri: str, selected_class_uri: str, graph: Dict[str, Any]) -> List[str]:
+    direct_types = sorted(
+        (
+            class_uri
+            for class_uri in graph["individuals"].get(node_uri, {}).get("direct_types", set())
+            if _is_subclass_of(class_uri, selected_class_uri, graph)
+        ),
+        key=lambda class_uri: (
+            -graph["class_depth"].get(class_uri, 0),
+            _class_label(class_uri, graph).lower(),
+            class_uri,
+        ),
+    )
+    start_classes: List[str] = [selected_class_uri]
+    for class_uri in direct_types:
+        if class_uri not in start_classes:
+            start_classes.append(class_uri)
+    return start_classes
 
 
 def _pick_node_class(node_uri: str, graph: Dict[str, Any]) -> str:
@@ -541,8 +627,9 @@ def _render_explanation_text(rendered_steps: List[Dict[str, Any]]) -> str:
             break
         pred = rendered_steps[idx]["label"]
         node = rendered_steps[idx + 1]["label"]
-        parts.append(f"{pred} {node}")
-    return " -> ".join(parts)
+        parts.append(pred)
+        parts.append(node)
+    return " ".join(part for part in parts if part)
 
 
 def _path_score(length: int) -> float:
@@ -585,11 +672,212 @@ def _expand_class_expr(graph: RDFGraph, expr: Any) -> List[URIRef]:
     return []
 
 
-def _fetch_tbox_cache() -> Dict[str, Any]:
-    global _TBOX_CACHE
-    if _TBOX_CACHE is not None:
-        return _TBOX_CACHE
+def _build_tbox_maps(
+    classes: Set[str],
+    class_labels: Dict[str, str],
+    direct_parents: Dict[str, Set[str]],
+    properties: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    for class_uri in classes:
+        direct_parents.setdefault(class_uri, set())
+        class_labels.setdefault(class_uri, _humanize_local_name(_local_name(class_uri)))
 
+    ancestors_map: Dict[str, Set[str]] = {}
+    for class_uri in classes:
+        ancestors = {class_uri}
+        stack = list(direct_parents.get(class_uri, set()))
+        while stack:
+            parent_uri = stack.pop()
+            if parent_uri in ancestors:
+                continue
+            ancestors.add(parent_uri)
+            stack.extend(direct_parents.get(parent_uri, set()))
+        ancestors_map[class_uri] = ancestors
+
+    descendants_map: Dict[str, Set[str]] = {class_uri: set() for class_uri in classes}
+    for class_uri, ancestors in ancestors_map.items():
+        for ancestor_uri in ancestors:
+            if ancestor_uri in descendants_map:
+                descendants_map[ancestor_uri].add(class_uri)
+
+    class_depth_map = {class_uri: max(0, len(ancestors) - 1) for class_uri, ancestors in ancestors_map.items()}
+
+    properties_by_domain: Dict[str, List[str]] = defaultdict(list)
+    for prop_uri, meta in properties.items():
+        for domain_uri in meta.get("domains", ()):
+            properties_by_domain[domain_uri].append(prop_uri)
+
+    for domain_uri in properties_by_domain:
+        properties_by_domain[domain_uri] = sorted(
+            set(properties_by_domain[domain_uri]),
+            key=lambda uri: (properties.get(uri, {}).get("label", uri).lower(), uri),
+        )
+
+    return {
+        "class_labels": class_labels,
+        "direct_parents": {uri: set(parents) for uri, parents in direct_parents.items()},
+        "ancestors": ancestors_map,
+        "descendants": descendants_map,
+        "class_depth": class_depth_map,
+        "properties": properties,
+        "properties_by_domain": dict(properties_by_domain),
+    }
+
+
+def _fetch_tbox_cache_from_fuseki() -> Optional[Dict[str, Any]]:
+    required_property_uris = {
+        f"{EN_NS}usesTechnology",
+        f"{EN_NS}providesTrainingCourse",
+        f"{EN_NS}trainsOnTechnology",
+        f"{EN_NS}usesSOP",
+        f"{EN_NS}isSOPFollowedBy",
+        f"{EN_NS}isResponseActionOf",
+        f"{EN_NS}isBasedOnIncident",
+        f"{EN_NS}involvesThreat",
+        f"{EN_NS}adressesThreat",
+        f"{EN_NS}connectsWithNetwork",
+        f"{EN_NS}hasFacility",
+    }
+
+    q_classes = f"""
+    PREFIX rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+    PREFIX owl:  <http://www.w3.org/2002/07/owl#>
+
+    SELECT DISTINCT ?class ?label ?parent WHERE {{
+      {{ ?class a owl:Class . }} UNION {{ ?class a rdfs:Class . }}
+      FILTER(STRSTARTS(STR(?class), "{EN_NS}"))
+      OPTIONAL {{
+        ?class rdfs:label ?label .
+        FILTER(LANG(?label) = "" || LANGMATCHES(LANG(?label), "en"))
+      }}
+      OPTIONAL {{
+        ?class rdfs:subClassOf ?parent .
+        FILTER(isIRI(?parent))
+        FILTER(STRSTARTS(STR(?parent), "{EN_NS}"))
+      }}
+    }}
+    """
+
+    q_properties = f"""
+    PREFIX rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+    PREFIX owl:  <http://www.w3.org/2002/07/owl#>
+
+    SELECT DISTINCT ?p ?label ?inv ?domain ?range WHERE {{
+      ?p a owl:ObjectProperty .
+      FILTER(STRSTARTS(STR(?p), "{EN_NS}"))
+      OPTIONAL {{
+        ?p rdfs:label ?label .
+        FILTER(LANG(?label) = "" || LANGMATCHES(LANG(?label), "en"))
+      }}
+      OPTIONAL {{
+        {{ ?p owl:inverseOf ?inv . }} UNION {{ ?inv owl:inverseOf ?p . }}
+        FILTER(STRSTARTS(STR(?inv), "{EN_NS}"))
+      }}
+      OPTIONAL {{
+        ?p rdfs:domain ?domainExpr .
+        {{
+          FILTER(isIRI(?domainExpr))
+          BIND(?domainExpr AS ?domain)
+        }} UNION {{
+          ?domainExpr owl:unionOf/rdf:rest*/rdf:first ?domain .
+        }}
+        FILTER(STRSTARTS(STR(?domain), "{EN_NS}"))
+      }}
+      OPTIONAL {{
+        ?p rdfs:range ?rangeExpr .
+        {{
+          FILTER(isIRI(?rangeExpr))
+          BIND(?rangeExpr AS ?range)
+        }} UNION {{
+          ?rangeExpr owl:unionOf/rdf:rest*/rdf:first ?range .
+        }}
+        FILTER(STRSTARTS(STR(?range), "{EN_NS}"))
+      }}
+    }}
+    """
+
+    class_data = run_sparql(q_classes)
+    prop_data = run_sparql(q_properties)
+    class_bindings = _require_sparql_bindings(class_data, "tbox classes", non_empty=True)
+    prop_bindings = _require_sparql_bindings(prop_data, "tbox properties", non_empty=True)
+
+    classes: Set[str] = set()
+    class_labels: Dict[str, str] = {}
+    direct_parents: Dict[str, Set[str]] = defaultdict(set)
+    for binding in class_bindings:
+        class_uri = _canonical_class_uri(binding["class"]["value"])
+        classes.add(class_uri)
+        class_labels.setdefault(class_uri, _label_or_name(class_uri, _get_val(binding, "label")))
+        parent_uri = _get_val(binding, "parent")
+        if parent_uri:
+            direct_parents[class_uri].add(_canonical_class_uri(parent_uri))
+
+    properties: Dict[str, Dict[str, Any]] = {}
+    inverse_map: Dict[str, str] = {}
+    for binding in prop_bindings:
+        prop_uri = binding["p"]["value"]
+        label = _label_or_name(prop_uri, _get_val(binding, "label"))
+        meta = properties.setdefault(
+            prop_uri,
+            {
+                "uri": prop_uri,
+                "label": label,
+                "inverse": None,
+                "domains": set(),
+                "ranges": set(),
+            },
+        )
+        inv_uri = _get_val(binding, "inv")
+        if inv_uri:
+            inverse_map[prop_uri] = inv_uri
+            inverse_map[inv_uri] = prop_uri
+        domain_uri = _get_val(binding, "domain")
+        if domain_uri:
+            canon_domain = _canonical_class_uri(domain_uri)
+            if canon_domain in classes:
+                meta["domains"].add(canon_domain)
+        range_uri = _get_val(binding, "range")
+        if range_uri:
+            canon_range = _canonical_class_uri(range_uri)
+            if canon_range in classes:
+                meta["ranges"].add(canon_range)
+
+    filtered_properties: Dict[str, Dict[str, Any]] = {}
+    for prop_uri, meta in properties.items():
+        if not meta["domains"] or not meta["ranges"]:
+            continue
+        filtered_properties[prop_uri] = {
+            "uri": prop_uri,
+            "label": meta["label"],
+            "inverse": inverse_map.get(prop_uri),
+            "domains": tuple(sorted(meta["domains"], key=lambda uri: class_labels.get(uri, uri).lower())),
+            "ranges": tuple(sorted(meta["ranges"], key=lambda uri: class_labels.get(uri, uri).lower())),
+        }
+    for prop_uri, meta in properties.items():
+        if prop_uri in filtered_properties:
+            continue
+        inverse_uri = inverse_map.get(prop_uri)
+        if not inverse_uri or inverse_uri not in filtered_properties:
+            continue
+        filtered_properties[prop_uri] = {
+            "uri": prop_uri,
+            "label": meta["label"],
+            "inverse": inverse_uri,
+            "domains": tuple(filtered_properties[inverse_uri]["ranges"]),
+            "ranges": tuple(filtered_properties[inverse_uri]["domains"]),
+        }
+
+    if not filtered_properties:
+        return None
+    if not required_property_uris.issubset(set(filtered_properties)):
+        return None
+
+    return _build_tbox_maps(classes, class_labels, direct_parents, filtered_properties)
+
+
+def _fetch_tbox_cache_from_local() -> Dict[str, Any]:
     rdf_graph = RDFGraph()
     rdf_graph.parse(_ontology_path(), format="turtle")
 
@@ -617,30 +905,6 @@ def _fetch_tbox_cache() -> Dict[str, Any]:
             continue
         direct_parents[cls_uri].add(parent_uri)
 
-    for class_uri in classes:
-        direct_parents.setdefault(class_uri, set())
-        class_labels.setdefault(class_uri, _humanize_local_name(_local_name(class_uri)))
-
-    ancestors_map: Dict[str, Set[str]] = {}
-    for class_uri in classes:
-        ancestors = {class_uri}
-        stack = list(direct_parents.get(class_uri, set()))
-        while stack:
-            parent_uri = stack.pop()
-            if parent_uri in ancestors:
-                continue
-            ancestors.add(parent_uri)
-            stack.extend(direct_parents.get(parent_uri, set()))
-        ancestors_map[class_uri] = ancestors
-
-    descendants_map: Dict[str, Set[str]] = {class_uri: set() for class_uri in classes}
-    for class_uri, ancestors in ancestors_map.items():
-        for ancestor_uri in ancestors:
-            if ancestor_uri in descendants_map:
-                descendants_map[ancestor_uri].add(class_uri)
-
-    class_depth_map = {class_uri: max(0, len(ancestors) - 1) for class_uri, ancestors in ancestors_map.items()}
-
     inverse_map: Dict[str, str] = {}
     for left, right in rdf_graph.subject_objects(OWL.inverseOf):
         if not (isinstance(left, URIRef) and isinstance(right, URIRef)):
@@ -655,7 +919,6 @@ def _fetch_tbox_cache() -> Dict[str, Any]:
         inverse_map[right_uri] = left_uri
 
     properties: Dict[str, Dict[str, Any]] = {}
-    properties_by_domain: Dict[str, List[str]] = defaultdict(list)
     for prop in rdf_graph.subjects(RDF.type, OWL.ObjectProperty):
         if not isinstance(prop, URIRef):
             continue
@@ -686,24 +949,43 @@ def _fetch_tbox_cache() -> Dict[str, Any]:
             "domains": tuple(sorted(domain_classes, key=lambda uri: class_labels.get(uri, uri).lower())),
             "ranges": tuple(sorted(range_classes, key=lambda uri: class_labels.get(uri, uri).lower())),
         }
-        for domain_uri in domain_classes:
-            properties_by_domain[domain_uri].append(prop_uri)
+    for prop in rdf_graph.subjects(RDF.type, OWL.ObjectProperty):
+        if not isinstance(prop, URIRef):
+            continue
+        prop_uri = str(prop)
+        if not prop_uri.startswith(EN_NS) or prop_uri in properties:
+            continue
+        inverse_uri = inverse_map.get(prop_uri)
+        if not inverse_uri or inverse_uri not in properties:
+            continue
+        properties[prop_uri] = {
+            "uri": prop_uri,
+            "label": _first_graph_label(rdf_graph, prop),
+            "inverse": inverse_uri,
+            "domains": tuple(properties[inverse_uri]["ranges"]),
+            "ranges": tuple(properties[inverse_uri]["domains"]),
+        }
+    return _build_tbox_maps(classes, class_labels, direct_parents, properties)
 
-    for domain_uri in properties_by_domain:
-        properties_by_domain[domain_uri] = sorted(
-            set(properties_by_domain[domain_uri]),
-            key=lambda uri: (properties.get(uri, {}).get("label", uri).lower(), uri),
-        )
 
-    _TBOX_CACHE = {
-        "class_labels": class_labels,
-        "direct_parents": {uri: set(parents) for uri, parents in direct_parents.items()},
-        "ancestors": ancestors_map,
-        "descendants": descendants_map,
-        "class_depth": class_depth_map,
-        "properties": properties,
-        "properties_by_domain": dict(properties_by_domain),
-    }
+def _fetch_tbox_cache() -> Dict[str, Any]:
+    global _TBOX_CACHE
+    if _TBOX_CACHE is not None:
+        return _TBOX_CACHE
+
+    fuseki_tbox = _fetch_tbox_cache_from_fuseki()
+    if fuseki_tbox is not None:
+        _TBOX_CACHE = fuseki_tbox
+        return _TBOX_CACHE
+
+    if ALLOW_LOCAL_TBOX_FALLBACK:
+        logger.warning("Fuseki TBox was incomplete; falling back to the local ontology.ttl snapshot.")
+        _TBOX_CACHE = _fetch_tbox_cache_from_local()
+        return _TBOX_CACHE
+
+    raise KnowledgeBaseUnavailableError(
+        "Could not build a complete TBox from Fuseki. Local TBox fallback is disabled."
+    )
     return _TBOX_CACHE
 
 
@@ -733,11 +1015,16 @@ def _criterion_matching_options(property_uri: str, tbox: Dict[str, Any]) -> Tupl
     return tuple(sorted(options))
 
 
-def _criterion_signature(start_class: str, steps: List[Dict[str, Any]], tbox: Dict[str, Any]) -> str:
-    parts = [_tbox_class_label(start_class, tbox)]
+def _criterion_signature(
+    start_class: str,
+    steps: List[Dict[str, Any]],
+    tbox: Dict[str, Any],
+    start_label: Optional[str] = None,
+) -> str:
+    parts = [start_label or _tbox_class_label(start_class, tbox)]
     current_class = start_class
     for step in steps:
-        parts.append(tbox["properties"].get(step["property_uri"], {}).get("label", _humanize_local_name(_local_name(step["property_uri"]))))
+        parts.append(step["property_label"])
         current_class = step["target_class"]
         parts.append(_tbox_class_label(current_class, tbox))
     return " -> ".join(parts)
@@ -750,23 +1037,24 @@ def _criterion_key(start_class: str, steps: List[Dict[str, Any]]) -> Tuple[Any, 
     return tuple(key)
 
 
-def _schema_steps_for_class(current_class: str, tbox: Dict[str, Any], graph: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _schema_steps_for_class(current_class: str, target_root: str, tbox: Dict[str, Any], graph: Dict[str, Any]) -> List[Dict[str, Any]]:
     applicable_steps: List[Dict[str, Any]] = []
     seen: Set[Tuple[str, str]] = set()
     effective_classes = set(graph.get("observed_direct_types_by_type", {}).get(current_class, {current_class}))
     effective_classes.add(current_class)
-
     schema_source_classes: Set[str] = set()
     for effective_class in effective_classes:
         if effective_class not in tbox["class_labels"]:
             continue
-        schema_source_classes.add(effective_class)
-        schema_source_classes.update(tbox["ancestors"].get(effective_class, {effective_class}))
+        for candidate_class in tbox["ancestors"].get(effective_class, {effective_class}):
+            schema_source_classes.add(candidate_class)
 
     for ancestor_uri in sorted(schema_source_classes, key=lambda uri: tbox["class_depth"].get(uri, 0), reverse=True):
         for property_uri in tbox["properties_by_domain"].get(ancestor_uri, []):
             prop_meta = tbox["properties"].get(property_uri, {})
             for range_class in prop_meta.get("ranges", ()):
+                matching_options = _criterion_matching_options(property_uri, tbox)
+                property_label = prop_meta.get("label", _humanize_local_name(_local_name(property_uri)))
                 key = (property_uri, range_class)
                 if key in seen:
                     continue
@@ -774,9 +1062,9 @@ def _schema_steps_for_class(current_class: str, tbox: Dict[str, Any], graph: Dic
                 applicable_steps.append(
                     {
                         "property_uri": property_uri,
-                        "property_label": prop_meta.get("label", _humanize_local_name(_local_name(property_uri))),
+                        "property_label": property_label,
                         "target_class": range_class,
-                        "matching_options": _criterion_matching_options(property_uri, tbox),
+                        "matching_options": matching_options,
                     }
                 )
 
@@ -828,7 +1116,7 @@ def _extract_seed_criteria(
         if depth >= max_length:
             continue
 
-        for schema_step in _schema_steps_for_class(current_class, tbox, graph):
+        for schema_step in _schema_steps_for_class(current_class, target_root, tbox, graph):
             next_class = schema_step["target_class"]
             next_is_target = _tbox_is_subclass_of(next_class, target_root, tbox)
             next_can_specialize_to_target = (not next_is_target) and _tbox_is_subclass_of(target_root, next_class, tbox)
@@ -888,6 +1176,47 @@ def _extract_seed_criteria(
     return criteria
 
 
+def _extract_seed_criteria_for_start_classes(
+    start_classes: List[str],
+    target_root: str,
+    tbox: Dict[str, Any],
+    graph: Dict[str, Any],
+    max_length: int = MAX_PATH_LENGTH,
+    canonical_start_class: Optional[str] = None,
+    display_start_label: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    anchor_start_class = canonical_start_class or (start_classes[0] if start_classes else "")
+    merged_criteria: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+    for start_class in start_classes:
+        for criterion in _extract_seed_criteria(start_class, target_root, tbox, graph, max_length):
+            canonical_key = _criterion_key(anchor_start_class, criterion["steps"])
+            if canonical_key not in merged_criteria:
+                merged_criteria[canonical_key] = {
+                    **criterion,
+                    "criterion_key": canonical_key,
+                    "start_class": anchor_start_class,
+                    "signature": _criterion_signature(
+                        anchor_start_class,
+                        criterion["steps"],
+                        tbox,
+                        start_label=display_start_label,
+                    ),
+                    "display_start_label": display_start_label,
+                    "actual_start_classes": {criterion["start_class"]},
+                }
+            else:
+                merged_criteria[canonical_key].setdefault("actual_start_classes", set()).add(criterion["start_class"])
+
+    criteria = list(merged_criteria.values())
+    criteria.sort(
+        key=lambda item: (
+            item["length"],
+            item["signature"].lower(),
+        )
+    )
+    return criteria
+
+
 def _criterion_neighbors(node_uri: str, criterion_step: Dict[str, Any], graph: Dict[str, Any]) -> List[str]:
     neighbors: Set[str] = set()
     for property_uri, direction in criterion_step.get("matching_options", ()):
@@ -908,6 +1237,10 @@ def _discover_criterion_matches_for_seed_node(seed_node: str, criterion: Dict[st
     cache_key = (seed_node, criterion["criterion_key"])
     if cache_key in _CRITERION_MATCH_CACHE:
         return _CRITERION_MATCH_CACHE[cache_key]
+
+    if criterion["start_class"] not in graph["individuals"].get(seed_node, {}).get("all_types", set()):
+        _CRITERION_MATCH_CACHE[cache_key] = {}
+        return {}
 
     discovered: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
 
@@ -985,6 +1318,8 @@ def _summarize_criterion_paths(
         "path_weight": criterion_model["path_weight"],
         "contribution": criterion_model["path_weight"] * criterion_model["normalized_scores"].get(target_node, 0.0),
         "globally_missing": criterion_model["globally_missing"],
+        "query_supported": criterion_model["query_supported"],
+        "active_for_score": criterion_model["active_for_score"],
         "example_text": next(iter(path_texts.values()), ""),
         "paths": rendered_paths,
     }
@@ -1006,7 +1341,15 @@ def _score_seed_against_candidates_with_criteria(
             "has_active_criteria": False,
         }
 
-    criteria = _extract_seed_criteria(seed["start_class"], target_root, tbox, graph, MAX_PATH_LENGTH)
+    criteria = _extract_seed_criteria_for_start_classes(
+        seed.get("criterion_start_classes", [seed["start_class"]]),
+        target_root,
+        tbox,
+        graph,
+        MAX_PATH_LENGTH,
+        canonical_start_class=seed["start_class"],
+        display_start_label=seed["type_label"],
+    )
     if not criteria:
         return {
             "fit_scores": {},
@@ -1018,7 +1361,7 @@ def _score_seed_against_candidates_with_criteria(
     criterion_models: List[Dict[str, Any]] = []
     criterion_summaries: Dict[str, List[Dict[str, Any]]] = {}
 
-    active_weight_raw_total = 0.0
+    active_length_counts: Dict[int, int] = defaultdict(int)
     for criterion in criteria:
         path_counts: Dict[str, int] = {target_node: 0 for target_node in candidate_nodes}
         target_paths: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
@@ -1037,26 +1380,44 @@ def _score_seed_against_candidates_with_criteria(
             for target_node, count in path_counts.items()
         }
         globally_missing = not _criterion_has_global_instance_support(criterion, graph)
-        if INCLUDE_GLOBALLY_MISSING_IN_SCORE or not globally_missing:
-            active_weight_raw_total += criterion["weight_raw"]
+        query_supported = max_count > 0
+        active_for_score = INCLUDE_GLOBALLY_MISSING_IN_SCORE or not globally_missing
+        if active_for_score:
+            active_length_counts[criterion["length"]] += 1
         criterion_model = {
             **criterion,
-            "signature": _criterion_signature(seed.get("display_start_class", seed["start_class"]), criterion["steps"], tbox),
+            "signature": criterion.get("signature")
+            or _criterion_signature(
+                criterion["start_class"],
+                criterion["steps"],
+                tbox,
+                start_label=criterion.get("display_start_label"),
+            ),
             "path_counts": path_counts,
             "normalized_scores": normalized_scores,
             "globally_missing": globally_missing,
+            "query_supported": query_supported,
+            "active_for_score": active_for_score,
+            "effective_weight_raw": 0.0,
             "path_weight": 0.0,
             "target_paths": {target_node: list(paths) for target_node, paths in target_paths.items()},
         }
         criterion_models.append(criterion_model)
 
+    active_weight_raw_total = 0.0
     for criterion_model in criterion_models:
-        if criterion_model["globally_missing"] and not INCLUDE_GLOBALLY_MISSING_IN_SCORE:
-            criterion_model["path_weight"] = 0.0
-        else:
-            criterion_model["path_weight"] = (
-                criterion_model["weight_raw"] / active_weight_raw_total if active_weight_raw_total else 0.0
-            )
+        if not criterion_model["active_for_score"]:
+            continue
+        same_length_count = active_length_counts.get(criterion_model["length"], 0)
+        criterion_model["effective_weight_raw"] = (
+            criterion_model["weight_raw"] / same_length_count if same_length_count else 0.0
+        )
+        active_weight_raw_total += criterion_model["effective_weight_raw"]
+
+    for criterion_model in criterion_models:
+        criterion_model["path_weight"] = (
+            criterion_model["effective_weight_raw"] / active_weight_raw_total if active_weight_raw_total else 0.0
+        )
 
     fit_scores: Dict[str, float] = {}
     for target_node in candidate_nodes:
@@ -1079,6 +1440,8 @@ def _score_seed_against_candidates_with_criteria(
                         "path_weight": criterion_model["path_weight"],
                         "contribution": 0.0,
                         "globally_missing": False,
+                        "query_supported": criterion_model["query_supported"],
+                        "active_for_score": criterion_model["active_for_score"],
                         "example_text": "",
                         "paths": [],
                     }
@@ -1100,9 +1463,7 @@ def _score_seed_against_candidates_with_criteria(
         "fit_scores": fit_scores,
         "criteria_models": criterion_models,
         "criterion_summaries": criterion_summaries,
-        "has_active_criteria": bool(criterion_models) if INCLUDE_GLOBALLY_MISSING_IN_SCORE else any(
-            not criterion_model["globally_missing"] for criterion_model in criterion_models
-        ),
+        "has_active_criteria": any(criterion_model["active_for_score"] for criterion_model in criterion_models),
     }
 
 
@@ -1148,7 +1509,14 @@ def _build_result_payload_from_criteria(
         for summary in summaries:
             if summary["globally_missing"] and not SHOW_GLOBALLY_MISSING_IN_ANALYSIS:
                 continue
-            status = "globally missing" if summary["globally_missing"] else ("matched" if summary["path_count"] > 0 else "missing")
+            if summary["globally_missing"]:
+                status = "globally missing"
+            elif not summary["query_supported"]:
+                status = "unsupported for query"
+            elif summary["path_count"] > 0:
+                status = "matched"
+            else:
+                status = "not matched here"
             meta_items.append(
                 {
                     "signature": summary["signature"],
@@ -1205,142 +1573,6 @@ def _build_result_payload_from_criteria(
         "graph_groups": graph_groups,
         "graph_paths": [],
     }
-
-
-def _signature_template(steps: List[Dict[str, Any]], graph: Dict[str, Any]) -> List[Dict[str, Any]]:
-    return [
-        {
-            "traversal_options": _canonical_traversal_options(step, graph),
-            "display_label": step["display_label"],
-            "display_direction": step["display_direction"],
-            "target_class": step["target_class"],
-        }
-        for step in steps
-    ]
-
-
-def _matching_neighbors(node_uri: str, template_step: Dict[str, Any], graph: Dict[str, Any]) -> List[str]:
-    neighbors_set: Set[str] = set()
-    traversal_options = template_step.get("traversal_options")
-    if traversal_options:
-        for property_uri, traversal_direction in traversal_options:
-            if traversal_direction == "forward":
-                neighbors_set.update(graph["forward_adj"].get(node_uri, {}).get(property_uri, []))
-            else:
-                neighbors_set.update(graph["reverse_adj"].get(node_uri, {}).get(property_uri, []))
-    else:
-        property_uri = template_step["traversal_property"]
-        if template_step["traversal_direction"] == "forward":
-            neighbors_set.update(graph["forward_adj"].get(node_uri, {}).get(property_uri, []))
-        else:
-            neighbors_set.update(graph["reverse_adj"].get(node_uri, {}).get(property_uri, []))
-
-    target_class = template_step.get("target_class")
-    if not target_class:
-        return sorted(neighbors_set)
-    return sorted(
-        neighbor_uri
-        for neighbor_uri in neighbors_set
-        if target_class in graph["individuals"].get(neighbor_uri, {}).get("all_types", set())
-    )
-
-
-def _pcrw_distribution(
-    seed_node: str,
-    start_class: str,
-    signature_key: Tuple[Any, ...],
-    template_steps: List[Dict[str, Any]],
-    graph: Dict[str, Any],
-) -> Dict[str, float]:
-    cache_key = (seed_node, signature_key)
-    if cache_key in _PCRW_CACHE:
-        return _PCRW_CACHE[cache_key]
-
-    seed_types = graph["individuals"].get(seed_node, {}).get("all_types", set())
-    if start_class and start_class not in seed_types:
-        _PCRW_CACHE[cache_key] = {}
-        return {}
-
-    current_distribution: Dict[str, float] = {seed_node: 1.0}
-    for template_step in template_steps:
-        next_distribution: Dict[str, float] = defaultdict(float)
-        for node_uri, probability in current_distribution.items():
-            neighbors = _matching_neighbors(node_uri, template_step, graph)
-            if not neighbors:
-                continue
-            share = probability / len(neighbors)
-            for neighbor_uri in neighbors:
-                next_distribution[neighbor_uri] += share
-        current_distribution = dict(next_distribution)
-        if not current_distribution:
-            break
-
-    _PCRW_CACHE[cache_key] = current_distribution
-    return current_distribution
-
-
-def _discover_target_paths_for_seed_node(
-    seed_node: str,
-    target_root: str,
-    graph: Dict[str, Any],
-    max_length: int = MAX_PATH_LENGTH,
-) -> Dict[str, List[Dict[str, Any]]]:
-    cache_key = (seed_node, target_root, max_length)
-    if cache_key in _PATH_DISCOVERY_CACHE:
-        return _PATH_DISCOVERY_CACHE[cache_key]
-
-    discovered: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-    queue: deque[Tuple[str, List[Dict[str, Any]], Set[str], Tuple[str, ...]]] = deque()
-    seed_class = _pick_node_class(seed_node, graph)
-    initial_class_history = (seed_class,) if seed_class else tuple()
-    queue.append((seed_node, [], {seed_node}, initial_class_history))
-
-    while queue:
-        current_node, steps, visited_nodes, class_history = queue.popleft()
-        depth = len(steps)
-        if depth > 0 and target_root in graph["individuals"].get(current_node, {}).get("all_types", set()):
-            discovered[current_node].append(
-                {
-                    "seed_node": seed_node,
-                    "target_node": current_node,
-                    "steps": steps,
-                    "length": depth,
-                }
-            )
-            continue
-
-        if depth >= max_length:
-            continue
-
-        for edge in graph["adjacency"].get(current_node, []):
-            neighbor_uri = edge["neighbor"]
-            if neighbor_uri in visited_nodes:
-                continue
-            target_class = _pick_node_class(neighbor_uri, graph)
-            if _would_reenter_class_branch(
-                class_history,
-                target_class,
-                graph["ancestors"],
-                graph["direct_parents"],
-            ):
-                continue
-            step = {
-                "from_node": current_node,
-                "to_node": neighbor_uri,
-                "traversal_property": edge["property"],
-                "traversal_direction": edge["traversal_direction"],
-                "display_label": edge["display_label"],
-                "display_direction": edge["display_direction"],
-                "source_class": _pick_node_class(current_node, graph),
-                "target_class": target_class,
-            }
-            next_class_history = class_history + ((target_class,) if target_class else tuple())
-            queue.append((neighbor_uri, steps + [step], visited_nodes | {neighbor_uri}, next_class_history))
-
-    _PATH_DISCOVERY_CACHE[cache_key] = {target_node: list(paths) for target_node, paths in discovered.items()}
-    return _PATH_DISCOVERY_CACHE[cache_key]
-
-
 def _prepare_seed(seed_payload: Dict[str, Any], graph: Dict[str, Any], index: int, duplicate_counts: Dict[str, int]) -> Optional[Dict[str, Any]]:
     type_uri = seed_payload.get("type_uri")
     mode = seed_payload.get("mode")
@@ -1355,19 +1587,20 @@ def _prepare_seed(seed_payload: Dict[str, Any], graph: Dict[str, Any], index: in
         if value_uri not in graph["individuals"]:
             return None
         seed_nodes = [value_uri]
-        # Keep the selected seed type for criterion extraction/scoring, but
-        # preserve the most specific matching class for user-facing XAI labels.
+        criterion_start_classes = _seed_start_classes_for_individual(value_uri, type_uri, graph)
         start_class = type_uri
         display_start_class = _pick_most_specific_class(value_uri, type_uri, graph)
         value_label = _node_label(value_uri, graph)
     elif mode == "type":
         selected_class_uri = value_uri or type_uri
         seed_nodes = _members_of_class(selected_class_uri, graph)
+        criterion_start_classes = [selected_class_uri]
         start_class = selected_class_uri
         display_start_class = selected_class_uri
         value_label = _class_label(selected_class_uri, graph)
     elif mode == "class":
         seed_nodes = _members_of_class(type_uri, graph)
+        criterion_start_classes = [type_uri]
         start_class = type_uri
         display_start_class = type_uri
         value_label = type_label
@@ -1392,276 +1625,12 @@ def _prepare_seed(seed_payload: Dict[str, Any], graph: Dict[str, Any], index: in
         "value_label": value_label,
         "seed_nodes": seed_nodes,
         "start_class": start_class,
+        "criterion_start_classes": criterion_start_classes,
         "display_start_class": display_start_class,
         "importance": float(seed_payload.get("importance", 2.0) or 2.0),
         "fit_label": fit_label,
         "fit_title": f"{fit_label} - {descriptor}",
         "tooltip": f"{type_label} / {mode} / {descriptor}",
-    }
-
-
-def _summarize_paths_for_target(
-    seed: Dict[str, Any],
-    target_node: str,
-    target_paths: List[Dict[str, Any]],
-    meta_path_models: Dict[Tuple[Any, ...], Dict[str, Any]],
-    graph: Dict[str, Any],
-) -> List[Dict[str, Any]]:
-    grouped: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
-    member_count = max(1, len(seed["seed_nodes"]))
-
-    for path in target_paths:
-        key = _path_signature_key(seed["start_class"], path["steps"], graph)
-        rendered = _render_path_tokens(path["steps"], graph)
-        explanation_text = _render_explanation_text(rendered)
-        entry = grouped.setdefault(
-            key,
-            {
-                "signature": _path_signature(seed["start_class"], path["steps"], graph),
-                "shortest_length": path["length"],
-                "member_support": set(),
-                "example_text": explanation_text,
-                "example_path": rendered,
-                "rendered_paths": {},
-            },
-        )
-        entry["member_support"].add(path["seed_node"])
-        if path["length"] < entry["shortest_length"]:
-            entry["shortest_length"] = path["length"]
-            entry["example_text"] = explanation_text
-            entry["example_path"] = rendered
-        path_key = tuple((item["kind"], item["label"], str(item.get("dir", ""))) for item in rendered)
-        entry["rendered_paths"][path_key] = rendered
-
-    summaries: List[Dict[str, Any]] = []
-    for key, entry in grouped.items():
-        meta_model = meta_path_models.get(key)
-        if not meta_model:
-            continue
-        support_count = len(entry["member_support"])
-        support_ratio = support_count / member_count
-        raw_pcrw = meta_model["raw_scores"].get(target_node, 0.0)
-        normalized_pcrw = meta_model["normalized_scores"].get(target_node, 0.0)
-        path_weight = meta_model["path_weight"]
-        contribution = path_weight * normalized_pcrw
-        rendered_paths = list(entry["rendered_paths"].values())
-        summaries.append(
-            {
-                "signature": entry["signature"],
-                "shortest_length": entry["shortest_length"],
-                "support_count": support_count,
-                "support_ratio": support_ratio,
-                "raw_pcrw": raw_pcrw,
-                "normalized_pcrw": normalized_pcrw,
-                "path_weight": path_weight,
-                "contribution": contribution,
-                "text": entry["example_text"],
-                "example_path": entry["example_path"],
-                "paths": rendered_paths,
-            }
-        )
-
-    summaries.sort(
-        key=lambda item: (
-            -item["contribution"],
-            -item["normalized_pcrw"],
-            -item["support_count"],
-            item["shortest_length"],
-            item["signature"].lower(),
-        )
-    )
-    return summaries
-
-
-def _score_seed_against_candidates(seed: Dict[str, Any], candidate_nodes: List[str], target_root: str, graph: Dict[str, Any]) -> Dict[str, Any]:
-    candidate_set = set(candidate_nodes)
-    if not candidate_set:
-        return {"fit_scores": {}, "raw_scores": {}, "path_summaries": defaultdict(list)}
-
-    member_count = len(seed["seed_nodes"])
-    target_paths: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-    meta_path_models: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
-
-    for seed_node in seed["seed_nodes"]:
-        discovered = _discover_target_paths_for_seed_node(seed_node, target_root, graph)
-        for target_node, paths in discovered.items():
-            if target_node not in candidate_set or not paths:
-                continue
-            for path in paths:
-                target_paths[target_node].append(path)
-                meta_key = _path_signature_key(seed["start_class"], path["steps"], graph)
-                model = meta_path_models.setdefault(
-                    meta_key,
-                    {
-                        "signature_key": meta_key,
-                        "signature": _path_signature(seed["start_class"], path["steps"], graph),
-                        "template_steps": _signature_template(path["steps"], graph),
-                        "shortest_length": path["length"],
-                        "length_prior": _path_score(path["length"]),
-                    },
-                )
-                if path["length"] < model["shortest_length"]:
-                    model["shortest_length"] = path["length"]
-                    model["length_prior"] = _path_score(path["length"])
-                    model["template_steps"] = _signature_template(path["steps"], graph)
-
-    active_meta_paths: List[Dict[str, Any]] = []
-    for model in meta_path_models.values():
-        aggregated_scores: Dict[str, float] = defaultdict(float)
-        for seed_node in seed["seed_nodes"]:
-            distribution = _pcrw_distribution(
-                seed_node,
-                seed["start_class"],
-                model["signature_key"],
-                model["template_steps"],
-                graph,
-            )
-            for target_node in candidate_nodes:
-                if target_node in distribution:
-                    aggregated_scores[target_node] += distribution[target_node]
-        raw_scores = {
-            target_node: (aggregated_scores.get(target_node, 0.0) / member_count if member_count else 0.0)
-            for target_node in candidate_nodes
-        }
-        max_raw = max(raw_scores.values(), default=0.0)
-        if max_raw <= 0.0:
-            continue
-        model["raw_scores"] = raw_scores
-        model["normalized_scores"] = {
-            target_node: (score / max_raw if max_raw else 0.0)
-            for target_node, score in raw_scores.items()
-            if score > 0.0
-        }
-        active_meta_paths.append(model)
-
-    total_length_prior = sum(model["length_prior"] for model in active_meta_paths)
-    for model in active_meta_paths:
-        model["path_weight"] = model["length_prior"] / total_length_prior if total_length_prior else 0.0
-
-    raw_scores = {
-        node_uri: sum(model["raw_scores"].get(node_uri, 0.0) for model in active_meta_paths)
-        for node_uri in candidate_nodes
-    }
-    fit_scores = {}
-    for node_uri in candidate_nodes:
-        fit_score = sum(model["path_weight"] * model["normalized_scores"].get(node_uri, 0.0) for model in active_meta_paths)
-        if fit_score > 0.0:
-            fit_scores[node_uri] = fit_score
-
-    path_summaries = {
-        target_node: _summarize_paths_for_target(seed, target_node, paths, meta_path_models, graph)
-        for target_node, paths in target_paths.items()
-        if paths
-    }
-    return {
-        "fit_scores": fit_scores,
-        "raw_scores": raw_scores,
-        "path_summaries": path_summaries,
-    }
-
-
-def _build_result_payload(
-    result_uri: str,
-    result_label: str,
-    representative_node: str,
-    prepared_seeds: List[Dict[str, Any]],
-    seed_results: List[Dict[str, Any]],
-    normalized_seed_weights: List[float],
-    graph: Dict[str, Any],
-    result_note: str = "",
-) -> Dict[str, Any]:
-    final_score = 0.0
-    seed_fit_clusters: List[Dict[str, Any]] = []
-    explanations_simple: List[Dict[str, Any]] = []
-    graph_groups: List[Dict[str, Any]] = []
-    meta_path_groups: List[Dict[str, Any]] = []
-    seen_explanations: Set[Tuple[str, str]] = set()
-
-    for idx, seed in enumerate(prepared_seeds):
-        seed_fit = seed_results[idx]["fit_scores"].get(representative_node, 0.0)
-        final_score += normalized_seed_weights[idx] * seed_fit
-        seed_fit_clusters.append(
-            {
-                "label": seed["fit_label"],
-                "score_0_10": round(seed_fit * 10.0, 1),
-                "tooltip": seed["tooltip"],
-            }
-        )
-        if seed_fit <= 0.0:
-            continue
-
-        summaries = seed_results[idx]["path_summaries"].get(representative_node, [])
-        if not summaries:
-            continue
-
-        rendered_group_paths: List[List[Dict[str, Any]]] = []
-        meta_paths_for_group: List[Dict[str, Any]] = []
-        seen_meta_paths: Set[Tuple[str, int, int, str]] = set()
-        for summary in summaries:
-            explanation_key = (seed["fit_title"], summary["text"])
-            if explanation_key not in seen_explanations:
-                seen_explanations.add(explanation_key)
-                explanations_simple.append(
-                    {
-                        "criterion": seed["fit_title"],
-                        "text": summary["text"],
-                        "entity": summary["signature"],
-                    }
-                )
-            rendered_group_paths.extend(summary["paths"])
-            meta_key = (
-                summary["signature"],
-                summary["shortest_length"],
-                summary["support_count"],
-                summary["text"],
-            )
-            if meta_key not in seen_meta_paths:
-                seen_meta_paths.add(meta_key)
-                meta_paths_for_group.append(
-                    {
-                        "signature": summary["signature"],
-                        "shortest_length": summary["shortest_length"],
-                        "support_count": summary["support_count"],
-                        "support_ratio": round(summary["support_ratio"], 3),
-                        "raw_pcrw": round(summary["raw_pcrw"], 6),
-                        "normalized_pcrw": round(summary["normalized_pcrw"], 3),
-                        "path_weight": round(summary["path_weight"], 3),
-                        "contribution_0_10": round(summary["contribution"] * 10.0, 1),
-                        "example_text": summary["text"],
-                    }
-                )
-
-        if rendered_group_paths:
-            unique_paths: List[List[Dict[str, Any]]] = []
-            seen_paths: Set[Tuple[Tuple[str, str, str], ...]] = set()
-            for rendered_path in rendered_group_paths:
-                key = tuple((item["kind"], item["label"], str(item.get("dir", ""))) for item in rendered_path)
-                if key in seen_paths:
-                    continue
-                seen_paths.add(key)
-                unique_paths.append(rendered_path)
-            graph_groups.append({"title": seed["fit_title"], "paths": unique_paths})
-        if meta_paths_for_group:
-            meta_path_groups.append({"title": seed["fit_title"], "paths": meta_paths_for_group})
-
-    scores = {
-        "final_score_0_1": final_score,
-        "final_score_0_10": final_score * 10.0,
-        "total_score": final_score * 10.0,
-        "seed_fit_clusters": seed_fit_clusters,
-    }
-
-    return {
-        "center_uri": result_uri,
-        "center_label": result_label,
-        "region": "",
-        "result_note": result_note,
-        "scores": scores,
-        "metric_chips": [],
-        "explanations_simple": explanations_simple,
-        "meta_path_groups": meta_path_groups,
-        "graph_groups": graph_groups,
-        "graph_paths": [],
     }
 
 
