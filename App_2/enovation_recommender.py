@@ -14,7 +14,10 @@ logger = logging.getLogger(__name__)
 
 EN_NS = "http://www.semanticweb.org/eNOVATION-ontology#"
 EN = Namespace(EN_NS)
-FUSEKI_ENDPOINT = os.getenv("FUSEKI_ENDPOINT", "http://localhost:3030/enovation/sparql")
+FUSEKI_ENDPOINT = os.getenv(
+    "FUSEKI_ENDPOINT",
+    "http://147.102.6.178:3030/enovation/sparql",
+)
 MAX_PATH_LENGTH = 4
 LENGTH_DECAY_ALPHA = 0.4
 INCLUDE_GLOBALLY_MISSING_IN_SCORE = False

@@ -17,7 +17,7 @@ python -m App_2.run_waitress
 
 Open <http://localhost:5000>. Configure `FUSEKI_ENDPOINT` in your shell before
 starting the server. The default is a local Fuseki dataset at
-`http://localhost:3030/enovation/sparql`. `.env.example` documents settings;
+`http://147.102.6.178:3030/enovation/sparql`. `.env.example` documents settings;
 the application does not automatically load `.env` files.
 
 ## Code map
